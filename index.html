@@ -1,0 +1,1864 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Language Surface</title>
+    <style>
+        :root {
+            --bg: #0b0c10;
+            --panel: #11131a;
+            --panel2: #0f1117;
+            --text: #e9e9ee;
+            --muted: #a7a7b4;
+            --border: #232633;
+            --accent: #7c5cff;
+            --accent2: #2dd4bf;
+            --danger: #ff4d6d;
+            --warn: #fbbf24;
+            --ok: #22c55e;
+            --shadow: 0 10px 30px rgba(0, 0, 0, .35);
+            --radius: 16px;
+            --radius2: 12px;
+            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        }
+
+        [data-theme="light"] {
+            --bg: #f6f7fb;
+            --panel: #ffffff;
+            --panel2: #fbfbfe;
+            --text: #12131a;
+            --muted: #5b5f72;
+            --border: #e3e6f2;
+            --shadow: 0 12px 30px rgba(10, 12, 20, .12);
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            font-family: var(--sans);
+            background: radial-gradient(1200px 600px at 20% -10%, rgba(124, 92, 255, .25), transparent 55%),
+                radial-gradient(900px 500px at 90% 10%, rgba(45, 212, 191, .18), transparent 55%),
+                var(--bg);
+            color: var(--text);
+        }
+
+        a {
+            color: inherit
+        }
+
+        .app {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 18px 14px 60px;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0));
+            backdrop-filter: blur(10px);
+            padding: 12px 0;
+            z-index: 20;
+        }
+
+        [data-theme="light"] .topbar {
+            background: linear-gradient(to bottom, rgba(246, 247, 251, .85), rgba(246, 247, 251, 0));
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            user-select: none;
+        }
+
+        .logo {
+            width: 34px;
+            height: 34px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            box-shadow: var(--shadow);
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 16px;
+            letter-spacing: .2px;
+        }
+
+        .brand .sub {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn {
+            border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .02));
+            color: var(--text);
+            padding: 10px 12px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: transform .06s ease, background .2s ease, border-color .2s ease, opacity .2s ease;
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        [data-theme="light"] .btn {
+            background: linear-gradient(180deg, rgba(10, 12, 20, .02), rgba(10, 12, 20, .01));
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            border-color: rgba(124, 92, 255, .55);
+        }
+
+        .btn:active {
+            transform: translateY(0px);
+            opacity: .92;
+        }
+
+        .btn.primary {
+            border-color: rgba(124, 92, 255, .65);
+            background: linear-gradient(135deg, rgba(124, 92, 255, .25), rgba(45, 212, 191, .12));
+        }
+
+        .btn.danger {
+            border-color: rgba(255, 77, 109, .55);
+            background: linear-gradient(135deg, rgba(255, 77, 109, .16), rgba(255, 255, 255, .02));
+        }
+
+        .btn.ghost {
+            background: transparent;
+        }
+
+        .btn.small {
+            padding: 8px 10px;
+            font-size: 12px;
+            border-radius: 10px;
+        }
+
+        .btn:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .pill {
+            font-size: 12px;
+            border: 1px solid var(--border);
+            color: var(--muted);
+            border-radius: 999px;
+            padding: 6px 10px;
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            background: rgba(255, 255, 255, .03);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1.2fr .8fr;
+            gap: 14px;
+            margin-top: 10px;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .02));
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        [data-theme="light"] .card {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, .94));
+        }
+
+        .card .hd {
+            padding: 14px 14px 10px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, .05);
+        }
+
+        [data-theme="light"] .card .hd {
+            border-bottom: 1px solid rgba(10, 12, 20, .06);
+        }
+
+        .card .hd h2 {
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .card .hd p {
+            margin: 6px 0 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .card .bd {
+            padding: 14px;
+        }
+
+        .row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .row:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 6px;
+            user-select: none;
+        }
+
+        input,
+        select,
+        textarea {
+            width: 100%;
+            background: rgba(0, 0, 0, .18);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 12px;
+            border-radius: 12px;
+            outline: none;
+            font-size: 13px;
+            transition: border-color .2s ease;
+        }
+
+        [data-theme="light"] input,
+        [data-theme="light"] select,
+        [data-theme="light"] textarea {
+            background: rgba(10, 12, 20, .02);
+        }
+
+        textarea {
+            min-height: 84px;
+            resize: vertical;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            border-color: rgba(124, 92, 255, .65);
+        }
+
+        .split {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        @media (max-width: 520px) {
+            .split {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Table */
+        .tableWrap {
+            overflow: auto;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: rgba(0, 0, 0, .12);
+        }
+
+        [data-theme="light"] .tableWrap {
+            background: rgba(10, 12, 20, .02);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 720px;
+        }
+
+        th,
+        td {
+            padding: 10px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, .06);
+            vertical-align: top;
+            font-size: 13px;
+        }
+
+        [data-theme="light"] th,
+        [data-theme="light"] td {
+            border-bottom: 1px solid rgba(10, 12, 20, .06);
+        }
+
+        th {
+            text-align: left;
+            color: var(--muted);
+            font-weight: 700;
+            position: sticky;
+            top: 0;
+            background: linear-gradient(180deg, rgba(17, 19, 26, .98), rgba(17, 19, 26, .88));
+            backdrop-filter: blur(8px);
+            z-index: 5;
+        }
+
+        [data-theme="light"] th {
+            background: linear-gradient(180deg, rgba(255, 255, 255, .98), rgba(255, 255, 255, .92));
+        }
+
+        td code {
+            font-family: var(--mono);
+            font-size: 12px;
+            color: rgba(124, 92, 255, .95);
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .chip {
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 12px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, .03);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .chip.on {
+            border-color: rgba(124, 92, 255, .55);
+            color: var(--text);
+            background: rgba(124, 92, 255, .12);
+        }
+
+        /* Modal */
+        .modalBack {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .55);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            z-index: 100;
+        }
+
+        .modal {
+            width: min(520px, 100%);
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        .modal .mhd {
+            padding: 14px 14px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, .06);
+        }
+
+        [data-theme="light"] .modal .mhd {
+            border-bottom: 1px solid rgba(10, 12, 20, .06);
+        }
+
+        .modal .mhd h3 {
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .modal .mhd p {
+            margin: 6px 0 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .modal .mbd {
+            padding: 14px;
+        }
+
+        .modal .mft {
+            padding: 12px 14px;
+            border-top: 1px solid rgba(255, 255, 255, .06);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        [data-theme="light"] .modal .mft {
+            border-top: 1px solid rgba(10, 12, 20, .06);
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: 18px;
+            background: rgba(17, 19, 26, .92);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 12px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            display: none;
+            z-index: 200;
+            font-size: 13px;
+            max-width: min(680px, calc(100% - 24px));
+        }
+
+        [data-theme="light"] .toast {
+            background: rgba(255, 255, 255, .92);
+        }
+
+        .toast .tmuted {
+            color: var(--muted);
+            font-size: 12px;
+            margin-top: 3px;
+        }
+
+        /* Progress */
+        .progressRow {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 10px;
+        }
+
+        .bar {
+            flex: 1;
+            height: 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, .18);
+            overflow: hidden;
+        }
+
+        [data-theme="light"] .bar {
+            background: rgba(10, 12, 20, .02);
+        }
+
+        .bar>div {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+        }
+
+        .hint {
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .kbd {
+            font-family: var(--mono);
+            font-size: 11px;
+            padding: 2px 6px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, .03);
+        }
+
+        .rightTools {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .nowrap {
+            white-space: nowrap;
+        }
+
+        .dangerText {
+            color: var(--danger);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app" id="app">
+        <div class="topbar">
+            <div class="brand">
+                <div class="logo"></div>
+                <div>
+                    <h1>Language Surface <span class="pill" id="pillProject">Project: —</span></h1>
+                    <span class="sub">Local-first translation manager (CSV / JSON) • GitHub Pages friendly</span>
+                </div>
+            </div>
+            <div class="nav">
+                <button class="btn ghost" id="btnList">List</button>
+                <button class="btn ghost" id="btnSettings">Settings</button>
+            </div>
+        </div>
+
+        <div id="view"></div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modalBack" id="modalBack" role="dialog" aria-modal="true">
+        <div class="modal">
+            <div class="mhd">
+                <h3 id="modalTitle">Confirm</h3>
+                <p id="modalDesc">—</p>
+            </div>
+            <div class="mbd" id="modalBody"></div>
+            <div class="mft">
+                <button class="btn" id="modalCancel">Cancel</button>
+                <button class="btn primary" id="modalOK">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+        <div id="toastMsg"></div>
+        <div class="tmuted" id="toastSub"></div>
+    </div>
+
+    <script>
+        /**
+         * Language Surface — single-file app
+         * - No external dependencies
+         * - LocalStorage only
+         * - Hash routing: #list, #edit/<key>, #settings
+         */
+
+        const LS_KEY = "language_surface_v1";
+        const DEFAULT_STATE = () => ({
+            version: 1,
+            settings: {
+                theme: "dark",
+                openaiApiKey: "",
+                openaiModel: "gpt-4.1-mini",
+                defaultMaxChars: 0,
+                defaultSourceLang: "en",
+                confirmDeletes: true,
+            },
+            ui: {
+                selectedProjectId: null,
+                visibleLangs: [],
+            },
+            projects: {}
+        });
+
+        function nowId() { return "p_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16); }
+
+        function loadState() {
+            try {
+                const raw = localStorage.getItem(LS_KEY);
+                if (!raw) return initState();
+                const st = JSON.parse(raw);
+                // basic merge (forward compatibility)
+                const base = DEFAULT_STATE();
+                const merged = {
+                    ...base,
+                    ...st,
+                    settings: { ...base.settings, ...(st.settings || {}) },
+                    ui: { ...base.ui, ...(st.ui || {}) },
+                    projects: st.projects || {}
+                };
+                if (!merged.ui.selectedProjectId || !merged.projects[merged.ui.selectedProjectId]) {
+                    const first = Object.keys(merged.projects)[0] || null;
+                    merged.ui.selectedProjectId = first;
+                }
+                return merged;
+            } catch (e) {
+                console.warn("Failed to load state", e);
+                return initState();
+            }
+        }
+
+        function saveState() {
+            localStorage.setItem(LS_KEY, JSON.stringify(state));
+        }
+
+        function initState() {
+            const st = DEFAULT_STATE();
+            const pid = nowId();
+            st.projects[pid] = {
+                id: pid,
+                name: "Default Project",
+                languages: ["en", "ja"],
+                entries: {
+                    "lp.hello": { en: "Hello", ja: "こんにちは" },
+                    "lp.bye": { en: "Good Bye", ja: "さようなら" }
+                },
+                meta: { createdAt: Date.now(), updatedAt: Date.now() }
+            };
+            st.ui.selectedProjectId = pid;
+            st.ui.visibleLangs = ["en"];
+            localStorage.setItem(LS_KEY, JSON.stringify(st));
+            return st;
+        }
+
+        let state = loadState();
+
+        function setTheme() {
+            document.documentElement.setAttribute("data-theme", state.settings.theme || "dark");
+        }
+        setTheme();
+
+        /* ---------- Tiny UI helpers ---------- */
+        const $ = (sel, el = document) => el.querySelector(sel);
+        const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
+
+        function toast(msg, sub = "") {
+            const t = $("#toast");
+            $("#toastMsg").textContent = msg;
+            $("#toastSub").textContent = sub;
+            t.style.display = "block";
+            clearTimeout(toast._t);
+            toast._t = setTimeout(() => { t.style.display = "none"; }, 2600);
+        }
+
+        function openModal({ title = "Confirm", desc = "", bodyHTML = "", okText = "OK", cancelText = "Cancel", danger = false }) {
+            return new Promise((resolve) => {
+                $("#modalTitle").textContent = title;
+                $("#modalDesc").textContent = desc;
+                $("#modalBody").innerHTML = bodyHTML || "";
+                $("#modalOK").textContent = okText;
+                $("#modalCancel").textContent = cancelText;
+                $("#modalOK").className = "btn " + (danger ? "danger" : "primary");
+                const back = $("#modalBack");
+                back.style.display = "flex";
+
+                const onCancel = () => { cleanup(); resolve(false); };
+                const onOK = () => { cleanup(); resolve(true); };
+                function cleanup() {
+                    back.style.display = "none";
+                    $("#modalCancel").removeEventListener("click", onCancel);
+                    $("#modalOK").removeEventListener("click", onOK);
+                    back.removeEventListener("click", onBg);
+                    document.removeEventListener("keydown", onEsc);
+                }
+                function onBg(e) { if (e.target === back) onCancel(); }
+                function onEsc(e) { if (e.key === "Escape") onCancel(); }
+
+                $("#modalCancel").addEventListener("click", onCancel);
+                $("#modalOK").addEventListener("click", onOK);
+                back.addEventListener("click", onBg);
+                document.addEventListener("keydown", onEsc);
+            });
+        }
+
+        function currentProject() {
+            return state.projects[state.ui.selectedProjectId] || null;
+        }
+        function setProject(id) {
+            if (!state.projects[id]) return;
+            state.ui.selectedProjectId = id;
+            // default visible langs
+            const p = currentProject();
+            if (p) {
+                const keep = (state.ui.visibleLangs || []).filter(l => p.languages.includes(l));
+                state.ui.visibleLangs = keep.length ? keep : [p.languages[0]].filter(Boolean);
+            }
+            saveState();
+            render();
+        }
+
+        function normalizeLangCode(s) {
+            return (s || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+        }
+        function normalizeKey(s) {
+            return (s || "").trim().replace(/\s+/g, " ");
+        }
+
+        /* ---------- Import/Export parsing ---------- */
+        function parseCSV(text) {
+            // Simple CSV parser with quotes support
+            const rows = [];
+            let i = 0, field = "", row = [], inQuotes = false;
+            while (i < text.length) {
+                const c = text[i];
+                if (inQuotes) {
+                    if (c === '"') {
+                        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+                        inQuotes = false; i++; continue;
+                    } else {
+                        field += c; i++; continue;
+                    }
+                } else {
+                    if (c === '"') { inQuotes = true; i++; continue; }
+                    if (c === ',') { row.push(field); field = ""; i++; continue; }
+                    if (c === '\n') {
+                        row.push(field); field = "";
+                        // ignore empty trailing line
+                        if (row.some(v => v !== "")) rows.push(row);
+                        row = []; i++; continue;
+                    }
+                    if (c === '\r') { i++; continue; }
+                    field += c; i++; continue;
+                }
+            }
+            row.push(field);
+            if (row.some(v => v !== "")) rows.push(row);
+            if (rows.length < 2) throw new Error("CSV must have a header row and at least one data row.");
+            return rows;
+        }
+
+        function importCSVToProject(csvText, projectName) {
+            const rows = parseCSV(csvText);
+            const header = rows[0].map(h => h.trim());
+            if (header.length < 2) throw new Error("CSV header must include: key, <language...>");
+            if (header[0].toLowerCase() !== "key") throw new Error('CSV first column must be named "key".');
+
+            const langs = header.slice(1).map(normalizeLangCode).filter(Boolean);
+            if (!langs.length) throw new Error("CSV must include at least one language column (e.g., en, ja).");
+
+            const entries = {};
+            for (let r = 1; r < rows.length; r++) {
+                const row = rows[r];
+                const key = normalizeKey(row[0] || "");
+                if (!key) continue;
+                entries[key] = entries[key] || {};
+                for (let c = 1; c < header.length; c++) {
+                    const lang = langs[c - 1];
+                    entries[key][lang] = (row[c] ?? "").toString();
+                }
+            }
+            const pid = nowId();
+            state.projects[pid] = {
+                id: pid,
+                name: projectName || "Imported CSV",
+                languages: uniq(langs),
+                entries,
+                meta: { createdAt: Date.now(), updatedAt: Date.now() }
+            };
+            state.ui.selectedProjectId = pid;
+            state.ui.visibleLangs = [state.projects[pid].languages[0]];
+            saveState();
+        }
+
+        function flattenNested(obj, prefix = "") {
+            // Converts nested objects like {lp:{hello:{en:"Hello"}}} into {"lp.hello":{en:"Hello"}}
+            const out = {};
+            function walk(node, path) {
+                if (node && typeof node === "object" && !Array.isArray(node)) {
+                    const keys = Object.keys(node);
+                    // if leaf is {en:"", ja:""} (all primitives), treat as translation map
+                    const allPrimitive = keys.length && keys.every(k => typeof node[k] !== "object" || node[k] === null);
+                    if (allPrimitive) {
+                        out[path] = node;
+                        return;
+                    }
+                    for (const k of keys) {
+                        const next = path ? (path + "." + k) : k;
+                        walk(node[k], next);
+                    }
+                }
+            }
+            walk(obj, prefix);
+            return out;
+        }
+
+        function importJSONToProject(jsonText, projectName) {
+            let data;
+            try { data = JSON.parse(jsonText); }
+            catch { throw new Error("Invalid JSON file."); }
+            if (!data || typeof data !== "object") throw new Error("JSON root must be an object.");
+
+            // Accept either:
+            // 1) {"lp.hello": {"en":"Hello","ja":"こんにちは"}}
+            // 2) nested as in prompt: { lp: { hello: { en:"Hello", ja:"..." } } }
+            let flat = {};
+            const keys = Object.keys(data);
+            const looksFlat = keys.some(k => k.includes(".")) && keys.every(k => typeof data[k] === "object");
+            if (looksFlat) {
+                flat = data;
+            } else {
+                flat = flattenNested(data);
+            }
+            const entries = {};
+            const langsSet = new Set();
+            for (const k of Object.keys(flat)) {
+                const key = normalizeKey(k);
+                if (!key) continue;
+                const map = flat[k];
+                if (!map || typeof map !== "object" || Array.isArray(map)) continue;
+                entries[key] = {};
+                for (const langRaw of Object.keys(map)) {
+                    const lang = normalizeLangCode(langRaw);
+                    if (!lang) continue;
+                    const v = map[langRaw];
+                    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null) {
+                        entries[key][lang] = (v ?? "").toString();
+                        langsSet.add(lang);
+                    } else {
+                        // ignore non-primitive values
+                    }
+                }
+            }
+            if (Object.keys(entries).length === 0) throw new Error("JSON didn't contain any valid translation entries.");
+            const langs = uniq(Array.from(langsSet));
+            if (!langs.length) throw new Error("JSON didn't contain any language codes.");
+
+            const pid = nowId();
+            state.projects[pid] = {
+                id: pid,
+                name: projectName || "Imported JSON",
+                languages: langs,
+                entries,
+                meta: { createdAt: Date.now(), updatedAt: Date.now() }
+            };
+            state.ui.selectedProjectId = pid;
+            state.ui.visibleLangs = [langs[0]];
+            saveState();
+        }
+
+        function uniq(arr) {
+            return Array.from(new Set(arr));
+        }
+
+        function toNestedObjectFromDotted(entriesForLangOrMap) {
+            // entriesForLangOrMap: { "lp.hello": "Hello", "lp.bye":"..." } OR { "lp.hello": {en:"",ja:""} }
+            const root = {};
+            for (const key of Object.keys(entriesForLangOrMap)) {
+                const parts = key.split(".").filter(Boolean);
+                if (!parts.length) continue;
+                let cur = root;
+                for (let i = 0; i < parts.length; i++) {
+                    const p = parts[i];
+                    const last = i === parts.length - 1;
+                    if (last) {
+                        cur[p] = entriesForLangOrMap[key];
+                    } else {
+                        cur[p] = cur[p] && typeof cur[p] === "object" ? cur[p] : {};
+                        cur = cur[p];
+                    }
+                }
+            }
+            return root;
+        }
+
+        function downloadFile(filename, content, mime = "application/octet-stream") {
+            const blob = new Blob([content], { type: mime });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+                URL.revokeObjectURL(a.href);
+                a.remove();
+            }, 0);
+        }
+
+        /* ---------- OpenAI translate (Responses API) ---------- */
+        async function openAITranslate({ sourceText, sourceLang, targetLang, maxChars = 0, extraContext = "" }) {
+            const key = (state.settings.openaiApiKey || "").trim();
+            if (!key) throw new Error("Missing API key. Add it in Settings.");
+            const model = (state.settings.openaiModel || "gpt-4.1-mini").trim();
+
+            const limitLine = maxChars && Number(maxChars) > 0
+                ? `- Output must be <= ${Number(maxChars)} characters.\n`
+                : "";
+
+            const prompt =
+                `You are a professional localization translator.
+Translate the text from ${sourceLang} to ${targetLang}.
+Rules:
+- Keep placeholders intact (e.g. {name}, %s, %d, {{var}}, ${'${var}'}).
+- Keep punctuation style natural for the target language.
+${limitLine}${extraContext ? "- Extra context: " + extraContext + "\n" : ""}
+Return ONLY the translated text, no quotes, no explanations.
+
+Text:
+${sourceText}`;
+
+            // Responses API (recommended for new projects)
+            // Docs: https://platform.openai.com/docs/api-reference/responses  :contentReference[oaicite:1]{index=1}
+            const res = await fetch("https://api.openai.com/v1/responses", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + key
+                },
+                body: JSON.stringify({
+                    model,
+                    input: prompt,
+                    // Try to nudge short, clean output
+                    temperature: 0.2
+                })
+            });
+
+            if (!res.ok) {
+                let errText = await res.text().catch(() => "");
+                throw new Error(`OpenAI error (${res.status}): ${errText || res.statusText}`);
+            }
+            const data = await res.json();
+
+            // Extract text from Responses API output
+            // We handle common shapes robustly
+            let outText = "";
+            if (Array.isArray(data.output)) {
+                for (const item of data.output) {
+                    if (item && item.type === "message" && Array.isArray(item.content)) {
+                        for (const c of item.content) {
+                            if (c && c.type === "output_text" && typeof c.text === "string") {
+                                outText += c.text;
+                            }
+                        }
+                    }
+                    if (item && item.type === "output_text" && typeof item.text === "string") {
+                        outText += item.text;
+                    }
+                }
+            }
+            outText = (outText || "").trim();
+            if (!outText) throw new Error("AI returned empty output.");
+            return outText;
+        }
+
+        /* ---------- Routing ---------- */
+        function route() {
+            const h = location.hash.replace(/^#/, "") || "list";
+            const [path, arg] = h.split("/", 2);
+            return { path, arg: decodeURIComponent(arg || "") };
+        }
+
+        /* ---------- Render ---------- */
+        $("#btnList").addEventListener("click", () => { location.hash = "#list"; });
+        $("#btnSettings").addEventListener("click", () => { location.hash = "#settings"; });
+
+        window.addEventListener("hashchange", render);
+
+        function render() {
+            setTheme();
+            const p = currentProject();
+            $("#pillProject").textContent = "Project: " + (p ? p.name : "—");
+
+            const { path, arg } = route();
+            if (path === "settings") return renderSettings();
+            if (path === "edit") return renderEdit(arg);
+            return renderList();
+        }
+
+        /* ---------- List View ---------- */
+        function renderList() {
+            const p = currentProject();
+            if (!p) {
+                $("#view").innerHTML = `<div class="card"><div class="bd">No project found.</div></div>`;
+                return;
+            }
+
+            // Ensure visible langs valid
+            state.ui.visibleLangs = (state.ui.visibleLangs || []).filter(l => p.languages.includes(l));
+            if (!state.ui.visibleLangs.length) state.ui.visibleLangs = [p.languages[0]].filter(Boolean);
+            saveState();
+
+            const entries = p.entries || {};
+            const keys = Object.keys(entries).sort((a, b) => a.localeCompare(b));
+            const visibleLangs = state.ui.visibleLangs;
+
+            const projectOptions = Object.values(state.projects)
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(pr => `<option value="${escapeHtml(pr.id)}" ${pr.id === p.id ? "selected" : ""}>${escapeHtml(pr.name)}</option>`)
+                .join("");
+
+            const langChips = p.languages.map(l => {
+                const on = visibleLangs.includes(l);
+                return `<span class="chip ${on ? "on" : ""}" data-langchip="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</span>`;
+            }).join("");
+
+            const rows = keys.map(k => {
+                const cells = visibleLangs.map(l => {
+                    const v = (entries[k] && entries[k][l]) ? entries[k][l] : "";
+                    return `<td title="${escapeHtml(v)}">${escapeHtml(trimPreview(v))}</td>`;
+                }).join("");
+                return `<tr>
+      <td><code>${escapeHtml(k)}</code></td>
+      ${cells}
+      <td class="nowrap">
+        <button class="btn small" data-edit="${escapeHtml(k)}">Edit</button>
+        <button class="btn small danger" data-delkey="${escapeHtml(k)}">Delete</button>
+      </td>
+    </tr>`;
+            }).join("");
+
+            $("#view").innerHTML = `
+    <div class="grid">
+      <div class="card">
+        <div class="hd">
+          <div>
+            <h2>List</h2>
+            <p>Pick a project, toggle visible languages, add keys, export/import.</p>
+          </div>
+          <div class="rightTools">
+            <button class="btn small" id="btnRenameProject">Rename</button>
+            <button class="btn small danger" id="btnDeleteProject">Delete</button>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="split">
+            <div>
+              <label>Project</label>
+              <select id="selProject">${projectOptions}</select>
+              <div class="hint" style="margin-top:8px;">
+                Tip: use <span class="kbd">List</span> to browse, <span class="kbd">Edit</span> to change translations.
+              </div>
+            </div>
+            <div>
+              <label>Import (CSV / JSON)</label>
+              <input type="file" id="fileImport" accept=".csv,.json,application/json,text/csv" />
+              <div class="hint" style="margin-top:8px;">
+                You’ll be prompted for a project name (or it uses the filename).
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <label>Show languages (multi-select)</label>
+            <div class="chips" id="langChips">${langChips}</div>
+            <div class="hint" style="margin-top:8px;">
+              Want a new language? Add it from <span class="kbd">Edit</span> view or use the quick add below.
+            </div>
+
+            <div class="row" style="margin-top:10px;">
+              <div style="flex:1">
+                <input id="inpNewLang" placeholder="Add language code (e.g. ko, fr-ca)"/>
+              </div>
+              <button class="btn" id="btnAddLangQuick">Add language</button>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;" class="split">
+            <div>
+              <label>Add new key</label>
+              <input id="inpNewKey" placeholder="e.g. lp.welcome.title" />
+            </div>
+            <div style="display:flex; align-items:flex-end; gap:10px;">
+              <button class="btn primary" id="btnAddKey" style="width:100%;">Add key</button>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;" class="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:240px;">Key</th>
+                  ${visibleLangs.map(l => `<th>${escapeHtml(l.toUpperCase())}</th>`).join("")}
+                  <th style="width:160px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || `<tr><td colspan="${3 + visibleLangs.length}" class="muted">No keys yet. Add one above.</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div class="rightTools">
+              <button class="btn" id="btnExportCSV">Export CSV</button>
+              <button class="btn" id="btnExportSingleJSON">Export single JSON</button>
+              <button class="btn" id="btnExportMultiJSON">Export multiple JSON</button>
+            </div>
+            <div class="rightTools">
+              <button class="btn" id="btnBulkAI">AI bulk translate</button>
+            </div>
+          </div>
+
+          <div class="hint" style="margin-top:10px;">
+            AI uses the OpenAI API via the <span class="kbd">Responses</span> endpoint. :contentReference[oaicite:2]{index=2}
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <div>
+            <h2>Project tools</h2>
+            <p>Quick actions and safety switches.</p>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="row">
+            <div style="flex:1">
+              <label>Create new project</label>
+              <input id="inpNewProject" placeholder="Project name" />
+            </div>
+            <button class="btn primary" id="btnCreateProject">Create</button>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div style="flex:1">
+              <label>Duplicate current project</label>
+              <div class="hint">Makes a copy you can experiment with.</div>
+            </div>
+            <button class="btn" id="btnDuplicate">Duplicate</button>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div style="flex:1">
+              <label>Reset app</label>
+              <div class="hint dangerText">Deletes all LocalStorage data for Language Surface.</div>
+            </div>
+            <button class="btn danger" id="btnReset">Reset</button>
+          </div>
+
+          <div style="margin-top:14px;" class="hint">
+            Everything is stored locally in your browser (LocalStorage). No server, no tracking.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+            // Bind
+            $("#selProject").addEventListener("change", (e) => setProject(e.target.value));
+
+            // lang chips
+            $("#langChips").addEventListener("click", (e) => {
+                const chip = e.target.closest("[data-langchip]");
+                if (!chip) return;
+                const lang = chip.getAttribute("data-langchip");
+                const vis = new Set(state.ui.visibleLangs || []);
+                if (vis.has(lang)) vis.delete(lang); else vis.add(lang);
+                const arr = Array.from(vis).filter(l => p.languages.includes(l));
+                state.ui.visibleLangs = arr.length ? arr : [p.languages[0]];
+                saveState();
+                renderList();
+            });
+
+            // add key
+            $("#btnAddKey").addEventListener("click", async () => {
+                const k = normalizeKey($("#inpNewKey").value);
+                if (!k) return toast("Enter a key.");
+                if (p.entries[k]) return toast("Key already exists.", k);
+                p.entries[k] = {};
+                for (const l of p.languages) p.entries[k][l] = "";
+                p.meta.updatedAt = Date.now();
+                saveState();
+                location.hash = "#edit/" + encodeURIComponent(k);
+            });
+
+            // edit & delete key
+            $("#view").addEventListener("click", async (e) => {
+                const edit = e.target.closest("[data-edit]");
+                if (edit) {
+                    const k = edit.getAttribute("data-edit");
+                    location.hash = "#edit/" + encodeURIComponent(k);
+                }
+                const del = e.target.closest("[data-delkey]");
+                if (del) {
+                    const k = del.getAttribute("data-delkey");
+                    const ok = await confirmIfNeeded(`Delete key "${k}"? This removes it from the project.`, true);
+                    if (!ok) return;
+                    delete p.entries[k];
+                    p.meta.updatedAt = Date.now();
+                    saveState();
+                    toast("Deleted key", k);
+                    renderList();
+                }
+            });
+
+            // quick add language
+            $("#btnAddLangQuick").addEventListener("click", async () => {
+                const lang = normalizeLangCode($("#inpNewLang").value);
+                if (!lang) return toast("Enter a language code (e.g. en, ja).");
+                await addLanguageToProject(p, lang);
+                $("#inpNewLang").value = "";
+                renderList();
+            });
+
+            // rename project
+            $("#btnRenameProject").addEventListener("click", async () => {
+                const ok = await openModal({
+                    title: "Rename project",
+                    desc: "Change the project name (does not change export filenames unless you export again).",
+                    bodyHTML: `<label>New name</label><input id="mName" value="${escapeAttr(p.name)}" />`,
+                    okText: "Rename"
+                });
+                if (!ok) return;
+                const name = ($("#mName")?.value || "").trim();
+                if (!name) return toast("Name can't be empty.");
+                p.name = name;
+                p.meta.updatedAt = Date.now();
+                saveState();
+                toast("Renamed project", name);
+                render();
+            });
+
+            // delete project
+            $("#btnDeleteProject").addEventListener("click", async () => {
+                const ok = await confirmIfNeeded(`Delete project "${p.name}"? This cannot be undone.`, true);
+                if (!ok) return;
+                const pid = p.id;
+                delete state.projects[pid];
+                const first = Object.keys(state.projects)[0] || null;
+                state.ui.selectedProjectId = first;
+                saveState();
+                toast("Deleted project", p.name);
+                render();
+            });
+
+            // create project
+            $("#btnCreateProject").addEventListener("click", () => {
+                const name = ($("#inpNewProject").value || "").trim() || "New Project";
+                const pid = nowId();
+                state.projects[pid] = {
+                    id: pid,
+                    name,
+                    languages: ["en"],
+                    entries: {},
+                    meta: { createdAt: Date.now(), updatedAt: Date.now() }
+                };
+                state.ui.selectedProjectId = pid;
+                state.ui.visibleLangs = ["en"];
+                saveState();
+                $("#inpNewProject").value = "";
+                toast("Created project", name);
+                render();
+            });
+
+            // duplicate
+            $("#btnDuplicate").addEventListener("click", () => {
+                const pid = nowId();
+                const copy = deepClone(p);
+                copy.id = pid;
+                copy.name = p.name + " (Copy)";
+                copy.meta = { createdAt: Date.now(), updatedAt: Date.now() };
+                state.projects[pid] = copy;
+                state.ui.selectedProjectId = pid;
+                state.ui.visibleLangs = [copy.languages[0]];
+                saveState();
+                toast("Duplicated project", copy.name);
+                render();
+            });
+
+            // reset
+            $("#btnReset").addEventListener("click", async () => {
+                const ok = await confirmIfNeeded("Reset Language Surface? This wipes all app data stored in this browser.", true);
+                if (!ok) return;
+                localStorage.removeItem(LS_KEY);
+                state = initState();
+                toast("Reset complete", "A new default project was created.");
+                render();
+            });
+
+            // import
+            $("#fileImport").addEventListener("change", async (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                const nameNoExt = file.name.replace(/\.[^.]+$/, "");
+                const ok = await openModal({
+                    title: "Import file",
+                    desc: `Import "${file.name}" as a new project.`,
+                    bodyHTML: `
+        <label>Project name (optional)</label>
+        <input id="mImportName" placeholder="${escapeAttr(nameNoExt)}" />
+        <div class="hint" style="margin-top:8px;">If empty, it uses the filename.</div>
+      `,
+                    okText: "Import"
+                });
+                if (!ok) { e.target.value = ""; return; }
+                const projName = ($("#mImportName")?.value || "").trim() || nameNoExt;
+
+                const text = await file.text();
+                try {
+                    if (file.name.toLowerCase().endsWith(".csv")) {
+                        importCSVToProject(text, projName);
+                    } else if (file.name.toLowerCase().endsWith(".json")) {
+                        importJSONToProject(text, projName);
+                    } else {
+                        throw new Error("Unsupported file type. Use .csv or .json");
+                    }
+                    toast("Imported project", projName);
+                    render();
+                } catch (err) {
+                    console.error(err);
+                    toast("Import failed", err.message || String(err));
+                } finally {
+                    e.target.value = "";
+                }
+            });
+
+            // export
+            $("#btnExportCSV").addEventListener("click", () => {
+                const csv = exportProjectCSV(p);
+                downloadFile(safeFileName(p.name) + ".csv", csv, "text/csv;charset=utf-8");
+                toast("Exported CSV", p.name);
+            });
+            $("#btnExportSingleJSON").addEventListener("click", () => {
+                const json = exportProjectSingleJSON(p);
+                downloadFile(safeFileName(p.name) + ".json", json, "application/json;charset=utf-8");
+                toast("Exported single JSON", p.name);
+            });
+            $("#btnExportMultiJSON").addEventListener("click", () => {
+                const files = exportProjectMultiJSON(p);
+                // download each
+                for (const f of files) {
+                    downloadFile(f.name, f.content, "application/json;charset=utf-8");
+                }
+                toast("Exported multiple JSON", `${files.length} file(s)`);
+            });
+
+            // AI bulk translate
+            $("#btnBulkAI").addEventListener("click", async () => {
+                const proj = currentProject();
+                if (!proj) return;
+                const langs = proj.languages.slice();
+                if (langs.length < 2) return toast("Add at least 2 languages to bulk translate.");
+
+                const options = langs.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+                const ok = await openModal({
+                    title: "AI bulk translate",
+                    desc: "Choose a target language. Bulk translate runs key-by-key (one language at a time).",
+                    bodyHTML: `
+        <div class="split">
+          <div>
+            <label>Source language</label>
+            <select id="mSrcLang">${options}</select>
+          </div>
+          <div>
+            <label>Target language</label>
+            <select id="mTgtLang">${options}</select>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <label>Max characters (0 = infinite)</label>
+          <input id="mMaxChars" type="number" min="0" value="${Number(state.settings.defaultMaxChars || 0)}" />
+        </div>
+        <div class="hint" style="margin-top:10px;">
+          Tip: set Source to your strongest language (commonly EN). If API key is missing, go to Settings.
+        </div>
+        <div class="progressRow">
+          <div class="bar"><div id="mBar"></div></div>
+          <div class="muted nowrap" id="mProg">0%</div>
+        </div>
+        <div class="hint" id="mStatus" style="margin-top:8px;"></div>
+      `,
+                    okText: "Start",
+                    cancelText: "Close"
+                });
+                if (!ok) return;
+
+                const src = normalizeLangCode($("#mSrcLang").value);
+                const tgt = normalizeLangCode($("#mTgtLang").value);
+                const maxChars = Number($("#mMaxChars").value || 0);
+
+                if (src === tgt) return toast("Source and target must differ.");
+                if (!proj.languages.includes(src) || !proj.languages.includes(tgt)) return toast("Invalid language selection.");
+
+                // Run
+                const keys = Object.keys(proj.entries).sort((a, b) => a.localeCompare(b));
+                const total = keys.length;
+                let done = 0;
+
+                for (const k of keys) {
+                    const srcText = (proj.entries[k][src] || "").trim();
+                    const tgtText = (proj.entries[k][tgt] || "").trim();
+
+                    $("#mStatus").textContent = `Translating ${k} (${done + 1}/${total})...`;
+                    if (!srcText) {
+                        done++;
+                        updateModalProgress(done, total);
+                        continue;
+                    }
+                    // If already has translation, skip (keep user edits)
+                    if (tgtText) {
+                        done++;
+                        updateModalProgress(done, total);
+                        continue;
+                    }
+                    try {
+                        const out = await openAITranslate({
+                            sourceText: srcText,
+                            sourceLang: src,
+                            targetLang: tgt,
+                            maxChars
+                        });
+                        proj.entries[k][tgt] = out;
+                        proj.meta.updatedAt = Date.now();
+                        saveState();
+                    } catch (err) {
+                        console.error(err);
+                        toast("Bulk AI stopped", err.message || String(err));
+                        $("#mStatus").textContent = "Stopped due to error.";
+                        return;
+                    }
+                    done++;
+                    updateModalProgress(done, total);
+                }
+                $("#mStatus").textContent = "Done.";
+                toast("Bulk translate complete", `${tgt.toUpperCase()} filled where empty`);
+                renderList();
+            });
+        }
+
+        function updateModalProgress(done, total) {
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            const bar = $("#mBar");
+            const prog = $("#mProg");
+            if (bar) bar.style.width = pct + "%";
+            if (prog) prog.textContent = pct + "%";
+        }
+
+        function exportProjectCSV(p) {
+            const langs = p.languages.slice();
+            const keys = Object.keys(p.entries).sort((a, b) => a.localeCompare(b));
+            const header = ["key", ...langs].join(",");
+            const lines = [header];
+            for (const k of keys) {
+                const row = [k, ...langs.map(l => p.entries[k]?.[l] ?? "")].map(csvEscape).join(",");
+                lines.push(row);
+            }
+            return lines.join("\n");
+        }
+        function csvEscape(v) {
+            const s = (v ?? "").toString();
+            if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+            return s;
+        }
+
+        function exportProjectSingleJSON(p) {
+            // nested: { lp: { hello: { en:"", ja:"" } } }
+            const map = {};
+            for (const k of Object.keys(p.entries)) {
+                map[k] = p.entries[k];
+            }
+            const nested = toNestedObjectFromDotted(map);
+            return JSON.stringify(nested, null, 2);
+        }
+
+        function exportProjectMultiJSON(p) {
+            const files = [];
+            for (const lang of p.languages) {
+                const perLang = {};
+                for (const k of Object.keys(p.entries)) {
+                    perLang[k] = p.entries[k]?.[lang] ?? "";
+                }
+                const nested = toNestedObjectFromDotted(perLang);
+                files.push({
+                    name: safeFileName(p.name) + "_" + lang + ".json",
+                    content: JSON.stringify(nested, null, 2)
+                });
+            }
+            return files;
+        }
+
+        /* ---------- Edit View ---------- */
+        function renderEdit(key) {
+            const p = currentProject();
+            if (!p) return renderList();
+            const entry = p.entries[key];
+            if (!entry) {
+                $("#view").innerHTML = `
+      <div class="card"><div class="bd">
+        <div class="row">
+          <div>Key not found: <code>${escapeHtml(key)}</code></div>
+          <button class="btn" onclick="location.hash='#list'">Back</button>
+        </div>
+      </div></div>
+    `;
+                return;
+            }
+
+            const langRows = p.languages.map(lang => {
+                const val = entry[lang] ?? "";
+                return `
+      <div class="card" style="margin-bottom:12px;">
+        <div class="bd">
+          <div class="row" style="align-items:flex-start;">
+            <div style="flex:1;">
+              <label>${escapeHtml(lang.toUpperCase())}</label>
+              <textarea data-lang="${escapeHtml(lang)}" placeholder="Enter translation...">${escapeHtml(val)}</textarea>
+            </div>
+            <div style="width:210px;">
+              <label>AI</label>
+              <div class="rightTools">
+                <button class="btn small" data-ai="${escapeHtml(lang)}">AI translate</button>
+                <input class="small" data-max="${escapeHtml(lang)}" type="number" min="0"
+                  value="${Number(state.settings.defaultMaxChars || 0)}"
+                  style="width:98px; padding:8px 10px; border-radius: 10px;" />
+              </div>
+              <div class="hint" style="margin-top:8px;">
+                Max chars (0 = infinite). Uses Settings model.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+            }).join("");
+
+            $("#view").innerHTML = `
+    <div class="card">
+      <div class="hd">
+        <div>
+          <h2>Edit</h2>
+          <p><button class="btn small" id="btnBack">Back to ${escapeHtml(p.name)} list</button></p>
+        </div>
+        <div class="rightTools">
+          <button class="btn" id="btnAddLang">Add language</button>
+          <button class="btn danger" id="btnDelLang">Delete language</button>
+        </div>
+      </div>
+      <div class="bd">
+        <div class="row">
+          <div style="flex:1">
+            <label>Key</label>
+            <input id="inpKeyRename" value="${escapeAttr(key)}" />
+            <div class="hint" style="margin-top:8px;">Changing the key will move the entry (dot notation supported).</div>
+          </div>
+          <div class="rightTools" style="align-items:flex-end;">
+            <button class="btn" id="btnSaveKeyName">Rename key</button>
+            <button class="btn danger" id="btnDeleteKey">Delete key</button>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          ${langRows}
+        </div>
+
+        <div class="row" style="margin-top:10px;">
+          <div class="hint">
+            AI requires an API key stored locally in Settings. OpenAI advises against deploying keys in client-side apps. :contentReference[oaicite:3]{index=3}
+          </div>
+          <button class="btn primary" id="btnSaveAll">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+            $("#btnBack").addEventListener("click", () => location.hash = "#list");
+
+            // save all textareas into entry
+            $("#btnSaveAll").addEventListener("click", () => {
+                const tas = $$("textarea[data-lang]");
+                for (const ta of tas) {
+                    const lang = ta.getAttribute("data-lang");
+                    entry[lang] = ta.value;
+                }
+                p.meta.updatedAt = Date.now();
+                saveState();
+                toast("Saved", key);
+                renderEdit(key);
+            });
+
+            // rename key
+            $("#btnSaveKeyName").addEventListener("click", async () => {
+                const newKey = normalizeKey($("#inpKeyRename").value);
+                if (!newKey) return toast("Key cannot be empty.");
+                if (newKey === key) return toast("No change.");
+                if (p.entries[newKey]) return toast("Target key already exists.", newKey);
+
+                const ok = await confirmIfNeeded(`Rename key "${key}" → "${newKey}"?`, false);
+                if (!ok) return;
+                p.entries[newKey] = p.entries[key];
+                delete p.entries[key];
+                p.meta.updatedAt = Date.now();
+                saveState();
+                toast("Renamed key", newKey);
+                location.hash = "#edit/" + encodeURIComponent(newKey);
+            });
+
+            // delete key
+            $("#btnDeleteKey").addEventListener("click", async () => {
+                const ok = await confirmIfNeeded(`Delete key "${key}"?`, true);
+                if (!ok) return;
+                delete p.entries[key];
+                p.meta.updatedAt = Date.now();
+                saveState();
+                toast("Deleted key", key);
+                location.hash = "#list";
+            });
+
+            // add language
+            $("#btnAddLang").addEventListener("click", async () => {
+                const ok = await openModal({
+                    title: "Add language",
+                    desc: "Adds a language across ALL keys in the project.",
+                    bodyHTML: `
+        <label>Language code</label>
+        <input id="mLang" placeholder="e.g. fr, ko, zh-hant" />
+      `,
+                    okText: "Add"
+                });
+                if (!ok) return;
+                const lang = normalizeLangCode($("#mLang").value);
+                if (!lang) return toast("Enter a language code.");
+                await addLanguageToProject(p, lang);
+                renderEdit(key);
+            });
+
+            // delete language
+            $("#btnDelLang").addEventListener("click", async () => {
+                if (p.languages.length <= 1) return toast("Project must have at least 1 language.");
+                const options = p.languages.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+                const ok = await openModal({
+                    title: "Delete language",
+                    desc: "This deletes the language across ALL keys (cannot be undone).",
+                    bodyHTML: `
+        <label>Select language</label>
+        <select id="mDelLang">${options}</select>
+        <div class="hint" style="margin-top:8px;">Tip: export before deleting if you want a backup.</div>
+      `,
+                    okText: "Delete",
+                    danger: true
+                });
+                if (!ok) return;
+                const lang = normalizeLangCode($("#mDelLang").value);
+                const ok2 = await confirmIfNeeded(`Really delete language "${lang.toUpperCase()}" from all keys?`, true);
+                if (!ok2) return;
+                await deleteLanguageFromProject(p, lang);
+                renderEdit(key);
+            });
+
+            // AI translate per language
+            $("#view").addEventListener("click", async (e) => {
+                const btn = e.target.closest("[data-ai]");
+                if (!btn) return;
+                const tgt = btn.getAttribute("data-ai");
+                const maxInput = $(`input[data-max="${cssEscape(tgt)}"]`);
+                const maxChars = Number((maxInput && maxInput.value) || state.settings.defaultMaxChars || 0);
+
+                const src = normalizeLangCode(state.settings.defaultSourceLang || "en");
+                if (!p.languages.includes(src)) {
+                    toast("Source language not in project", `Set Settings source to one of: ${p.languages.join(", ")}`);
+                    return;
+                }
+                if (src === tgt) {
+                    toast("Target equals source", "Pick a different target language.");
+                    return;
+                }
+                const srcText = (entry[src] || "").trim();
+                if (!srcText) {
+                    toast("Nothing to translate", `Source (${src.toUpperCase()}) is empty.`);
+                    return;
+                }
+                btn.disabled = true;
+                btn.textContent = "Translating...";
+                try {
+                    const out = await openAITranslate({
+                        sourceText: srcText,
+                        sourceLang: src,
+                        targetLang: tgt,
+                        maxChars
+                    });
+                    entry[tgt] = out;
+                    p.meta.updatedAt = Date.now();
+                    saveState();
+                    toast("AI translated", `${src.toUpperCase()} → ${tgt.toUpperCase()}`);
+                    renderEdit(key);
+                } catch (err) {
+                    console.error(err);
+                    toast("AI error", err.message || String(err));
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = "AI translate";
+                }
+            });
+        }
+
+        async function addLanguageToProject(p, lang) {
+            if (p.languages.includes(lang)) return toast("Language already exists", lang.toUpperCase());
+            p.languages.push(lang);
+            // add empty entry on every key
+            for (const k of Object.keys(p.entries)) {
+                p.entries[k][lang] = p.entries[k][lang] ?? "";
+            }
+            p.meta.updatedAt = Date.now();
+            saveState();
+            toast("Added language", lang.toUpperCase());
+        }
+
+        async function deleteLanguageFromProject(p, lang) {
+            if (!p.languages.includes(lang)) return toast("Language not found", lang);
+            if (p.languages.length <= 1) return toast("Cannot delete last language.");
+            p.languages = p.languages.filter(l => l !== lang);
+            for (const k of Object.keys(p.entries)) {
+                delete p.entries[k][lang];
+            }
+            // update visible langs
+            state.ui.visibleLangs = (state.ui.visibleLangs || []).filter(l => p.languages.includes(l));
+            if (!state.ui.visibleLangs.length) state.ui.visibleLangs = [p.languages[0]];
+            p.meta.updatedAt = Date.now();
+            saveState();
+            toast("Deleted language", lang.toUpperCase());
+        }
+
+        /* ---------- Settings View ---------- */
+        function renderSettings() {
+            const s = state.settings;
+            $("#view").innerHTML = `
+    <div class="card">
+      <div class="hd">
+        <div>
+          <h2>Settings</h2>
+          <p>Everything is stored locally. Theme + AI settings live in LocalStorage.</p>
+        </div>
+        <div class="rightTools">
+          <button class="btn" id="btnBackToList">Back</button>
+        </div>
+      </div>
+      <div class="bd">
+        <div class="split">
+          <div>
+            <label>Theme</label>
+            <select id="setTheme">
+              <option value="dark" ${s.theme === "dark" ? "selected" : ""}>Dark</option>
+              <option value="light" ${s.theme === "light" ? "selected" : ""}>Light</option>
+            </select>
+          </div>
+          <div>
+            <label>Confirm deletes</label>
+            <select id="setConfirm">
+              <option value="yes" ${s.confirmDeletes ? "selected" : ""}>Yes</option>
+              <option value="no" ${!s.confirmDeletes ? "selected" : ""}>No</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;" class="card">
+          <div class="bd">
+            <div class="row">
+              <div style="flex:1;">
+                <label>OpenAI API key (stored locally)</label>
+                <input id="setKey" type="password" placeholder="sk-..." value="${escapeAttr(s.openaiApiKey || "")}" />
+                <div class="hint" style="margin-top:8px;">
+                  Storing keys in a browser can expose them; OpenAI recommends routing through a backend for production. :contentReference[oaicite:4]{index=4}
+                </div>
+              </div>
+            </div>
+
+            <div class="split" style="margin-top:10px;">
+              <div>
+                <label>Model</label>
+                <input id="setModel" value="${escapeAttr(s.openaiModel || "gpt-4.1-mini")}" />
+                <div class="hint" style="margin-top:8px;">Used for single + bulk translate.</div>
+              </div>
+              <div>
+                <label>Default source language</label>
+                <input id="setSrcLang" value="${escapeAttr(s.defaultSourceLang || "en")}" />
+                <div class="hint" style="margin-top:8px;">AI translates from this language.</div>
+              </div>
+            </div>
+
+            <div style="margin-top:10px;">
+              <label>Default max characters (0 = infinite)</label>
+              <input id="setMaxChars" type="number" min="0" value="${Number(s.defaultMaxChars || 0)}" />
+              <div class="hint" style="margin-top:8px;">
+                Included in the translation prompt to encourage short UI strings (not a hard guarantee).
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px;">
+          <div class="hint">
+            Extra features: Duplicate project, per-field AI with per-click max chars, bulk translate skips filled targets.
+          </div>
+          <button class="btn primary" id="btnSaveSettings">Save settings</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+            $("#btnBackToList").addEventListener("click", () => location.hash = "#list");
+
+            $("#btnSaveSettings").addEventListener("click", () => {
+                state.settings.theme = $("#setTheme").value;
+                state.settings.confirmDeletes = $("#setConfirm").value === "yes";
+                state.settings.openaiApiKey = ($("#setKey").value || "").trim();
+                state.settings.openaiModel = ($("#setModel").value || "").trim() || "gpt-4.1-mini";
+                state.settings.defaultSourceLang = normalizeLangCode($("#setSrcLang").value || "en") || "en";
+                state.settings.defaultMaxChars = Math.max(0, Number($("#setMaxChars").value || 0));
+                saveState();
+                setTheme();
+                toast("Saved settings");
+                renderSettings();
+            });
+        }
+
+        /* ---------- Confirm helpers ---------- */
+        async function confirmIfNeeded(desc, danger = false) {
+            if (state.settings.confirmDeletes === false && danger) return true;
+            return await openModal({
+                title: danger ? "Confirm" : "Confirm",
+                desc,
+                bodyHTML: "",
+                okText: danger ? "Confirm" : "OK",
+                danger
+            });
+        }
+
+        /* ---------- Utilities ---------- */
+        function trimPreview(s, max = 80) {
+            s = (s ?? "").toString();
+            if (s.length <= max) return s;
+            return s.slice(0, max - 1) + "…";
+        }
+        function safeFileName(name) {
+            return (name || "project").trim().replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "project";
+        }
+        function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+        function escapeHtml(str) {
+            return (str ?? "").toString()
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+        function escapeAttr(str) { return escapeHtml(str).replace(/"/g, "&quot;"); }
+        function cssEscape(str) { return (str ?? "").toString().replace(/"/g, '\\"'); }
+
+        /* ---------- boot ---------- */
+        (function boot() {
+            // Ensure hash
+            if (!location.hash) location.hash = "#list";
+            render();
+        })();
+    </script>
+</body>
+
+</html>
