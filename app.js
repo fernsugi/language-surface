@@ -20,10 +20,13 @@ const DEFAULT_STATE = () => ({
   ui: {
     selectedProjectId: null,
     visibleLangs: [],
+    seenWelcome: false,
     listFilterKey: "",
     listFilterText: "",
     listPageSize: 100,
     listPage: 0,
+    listSortBy: "key", // "key" | "lang:<code>"
+    listSortDir: "asc", // "asc" | "desc"
     colWidths: {},
   },
   projects: {}
@@ -137,14 +140,26 @@ function openChoiceModal({ title, desc, choices }) {
     $("#modalDesc").textContent = desc || "";
     const body = $("#modalBody");
     body.innerHTML = (choices || []).map((c, idx) => {
-      const hint = c.hint ? `<div class="hint" style="margin-top:6px;">${escapeHtml(c.hint)}</div>` : "";
+      const hint = (c.hint || "").toString().trim();
+      const main = hint
+        ? `
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; width:100%;">
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div>${escapeHtml(c.label)}</div>
+              <div class="hint" style="margin-top:6px;">${escapeHtml(hint)}</div>
+            </div>
+            <div class="muted nowrap" style="padding-top:2px;">→</div>
+          </div>
+        `
+        : `
+          <span>${escapeHtml(c.label)}</span>
+          <span class="muted nowrap">→</span>
+        `;
       return `
         <div style="margin-bottom:10px;">
           <button class="btn" type="button" data-choice="${escapeAttr(String(c.value))}" id="mChoice_${idx}" style="width:100%; justify-content:space-between;">
-            <span>${escapeHtml(c.label)}</span>
-            <span class="muted nowrap">→</span>
+            ${main}
           </button>
-          ${hint}
         </div>
       `;
     }).join("");
@@ -199,6 +214,145 @@ function normalizeLangCode(s) {
 }
 function normalizeKey(s) {
   return (s || "").trim().replace(/\s+/g, " ");
+}
+
+function bindCreateProjectControls() {
+  const btn = $("#btnCreateProject");
+  const inp = $("#inpNewProject");
+  if (!btn || !inp) return;
+  btn.addEventListener("click", () => {
+    const name = (inp.value || "").trim() || "New Project";
+    const pid = nowId();
+    state.projects[pid] = {
+      id: pid,
+      name,
+      languages: ["en"],
+      entries: {},
+      meta: { createdAt: Date.now(), updatedAt: Date.now() }
+    };
+    state.ui.selectedProjectId = pid;
+    state.ui.visibleLangs = ["en"];
+    saveState();
+    inp.value = "";
+    toast("Created project", name);
+    render();
+  });
+}
+
+function bindImportControls() {
+  const btn = $("#btnImport");
+  const inp = $("#fileImport");
+  if (!btn || !inp) return;
+
+  // import chooser
+  btn.addEventListener("click", async () => {
+    const mode = await openChoiceModal({
+      title: "Import",
+      desc: "Choose the format you are importing.",
+      choices: [
+        { label: "CSV (single file)", value: "csv" },
+        { label: "Single JSON (nested translation map)", value: "single_json" },
+        { label: "Multiple JSON (one file per language)", value: "multi_json", hint: "Tip: name files like en.json, ja.json, fr-ca.json" }
+      ]
+    });
+    if (!mode) return;
+
+    inp.dataset.importMode = mode;
+    if (mode === "csv") {
+      inp.multiple = false;
+      inp.accept = ".csv,text/csv";
+    } else if (mode === "single_json") {
+      inp.multiple = false;
+      inp.accept = ".json,application/json";
+    } else {
+      inp.multiple = true;
+      inp.accept = ".json,application/json";
+    }
+    inp.click();
+  });
+
+  // import handler
+  inp.addEventListener("change", async (e) => {
+    const mode = e.target.dataset.importMode || "";
+    const files = Array.from((e.target.files || [])).filter(Boolean);
+    if (!files.length) return;
+
+    const first = files[0];
+    const nameNoExt = first.name.replace(/\.[^.]+$/, "");
+    const ok = await openModal({
+      title: "Import",
+      desc: files.length > 1
+        ? `Import ${files.length} files as a new project.`
+        : `Import "${first.name}" as a new project.`,
+      bodyHTML: `
+        <label>Project name (optional)</label>
+        <input id="mImportName" placeholder="${escapeAttr(nameNoExt)}" />
+      `,
+      okText: "Import"
+    });
+    if (!ok) { e.target.value = ""; return; }
+    const projName = ($("#mImportName")?.value || "").trim() || nameNoExt;
+
+    try {
+      if (mode === "csv") {
+        if (files.length !== 1) throw new Error("CSV import supports a single file.");
+        const text = await first.text();
+        importCSVToProject(text, projName);
+      } else if (mode === "single_json") {
+        if (files.length !== 1) throw new Error("Single JSON import supports a single file.");
+        const text = await first.text();
+        // Decide whether this JSON is a translation-map (multi-language) or a per-language nested JSON.
+        let data;
+        try { data = JSON.parse(text); }
+        catch { throw new Error("Invalid JSON file."); }
+        const isTranslationMap = !!jsonToEntriesAndLangs(data);
+        if (isTranslationMap) {
+          importJSONToProject(text, projName, first.name);
+        } else {
+          const inferred = inferLangFromFileName(first.name) || state.settings.defaultSourceLang || "en";
+          const okLang = await openModal({
+            title: "Single-language JSON",
+            desc: "This file looks like a per-language nested JSON (values are strings). Choose which language to import it as.",
+            bodyHTML: `
+              <label>Language code</label>
+              <input id="mImportLang" placeholder="e.g. en" value="${escapeAttr(inferred)}" />
+              <div class="hint" style="margin-top:8px;">Tip: name the file like en.json / ja.json / fr-ca.json for auto-detect.</div>
+            `,
+            okText: "Import"
+          });
+          if (!okLang) throw new Error("Import cancelled.");
+          const lang = normalizeLangCode($("#mImportLang")?.value || "");
+          if (!lang) throw new Error("Language code is required.");
+          importJSONToProject(text, projName, first.name, lang);
+        }
+      } else if (mode === "multi_json") {
+        const bad = files.find(f => !f.name.toLowerCase().endsWith(".json"));
+        if (bad) throw new Error("Multi-file import supports JSON files only.");
+        await importJSONFilesToProject(files, projName);
+      } else {
+        throw new Error("Please choose an import type.");
+      }
+
+      const imported = currentProject();
+      const langs = imported ? (imported.languages || []) : [];
+      const keyCount = imported ? Object.keys(imported.entries || {}).length : 0;
+
+      // Avoid confusion where a previous filter makes it look like only a few keys imported.
+      state.ui.listFilterKey = "";
+      state.ui.listFilterText = "";
+      state.ui.listPage = 0;
+      saveState();
+
+      toast("Imported project", `${projName} • ${langs.join(", ") || "(no langs)"} • ${keyCount.toLocaleString()} keys`);
+      render();
+    } catch (err) {
+      console.error(err);
+      toast("Import failed", err.message || String(err));
+    } finally {
+      e.target.value = "";
+      delete e.target.dataset.importMode;
+    }
+  });
 }
 
 /* ---------- Import/Export parsing ---------- */
@@ -269,12 +423,288 @@ function importCSVToProject(csvText, projectName) {
 
 const LANG_CODE_RE = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i;
 
+const LANG_TIPS = [
+  { name: "Abkhazian", codes: ["ab"] },
+  { name: "Afar", codes: ["aa"] },
+  { name: "Afrikaans", codes: ["af"] },
+  { name: "Akan", codes: ["ak"] },
+  { name: "Albanian", codes: ["sq"] },
+  { name: "Amharic", codes: ["am"] },
+  { name: "Arabic", codes: ["ar"] },
+  { name: "Aragonese", codes: ["an"] },
+  { name: "Armenian", codes: ["hy"] },
+  { name: "Assamese", codes: ["as"] },
+  { name: "Avaric", codes: ["av"] },
+  { name: "Avestan", codes: ["ae"] },
+  { name: "Aymara", codes: ["ay"] },
+  { name: "Azerbaijani", codes: ["az"] },
+  { name: "Bambara", codes: ["bm"] },
+  { name: "Bashkir", codes: ["ba"] },
+  { name: "Basque", codes: ["eu"] },
+  { name: "Belarusian", codes: ["be"] },
+  { name: "Bengali (Bangla)", codes: ["bn"] },
+  { name: "Bihari", codes: ["bh"] },
+  { name: "Bislama", codes: ["bi"] },
+  { name: "Bosnian", codes: ["bs"] },
+  { name: "Breton", codes: ["br"] },
+  { name: "Bulgarian", codes: ["bg"] },
+  { name: "Burmese", codes: ["my"] },
+  { name: "Catalan", codes: ["ca"] },
+  { name: "Chamorro", codes: ["ch"] },
+  { name: "Chechen", codes: ["ce"] },
+  { name: "Chichewa, Chewa, Nyanja", codes: ["ny"] },
+  { name: "Chinese", codes: ["zh"] },
+  { name: "Chinese (Simplified)", codes: ["zh-hans"] },
+  { name: "Chinese (Traditional)", codes: ["zh-hant"] },
+  { name: "Chuvash", codes: ["cv"] },
+  { name: "Cornish", codes: ["kw"] },
+  { name: "Corsican", codes: ["co"] },
+  { name: "Cree", codes: ["cr"] },
+  { name: "Croatian", codes: ["hr"] },
+  { name: "Czech", codes: ["cs"] },
+  { name: "Danish", codes: ["da"] },
+  { name: "Divehi, Dhivehi, Maldivian", codes: ["dv"] },
+  { name: "Dutch", codes: ["nl"] },
+  { name: "Dzongkha", codes: ["dz"] },
+  { name: "English", codes: ["en"] },
+  { name: "Esperanto", codes: ["eo"] },
+  { name: "Estonian", codes: ["et"] },
+  { name: "Ewe", codes: ["ee"] },
+  { name: "Faroese", codes: ["fo"] },
+  { name: "Fijian", codes: ["fj"] },
+  { name: "Finnish", codes: ["fi"] },
+  { name: "French", codes: ["fr"] },
+  { name: "Fula, Fulah, Pulaar, Pular", codes: ["ff"] },
+  { name: "Galician", codes: ["gl"] },
+  { name: "Gaelic (Scottish)", codes: ["gd"] },
+  { name: "Gaelic (Manx)", codes: ["gv"] },
+  { name: "Georgian", codes: ["ka"] },
+  { name: "German", codes: ["de"] },
+  { name: "Greek", codes: ["el"] },
+  { name: "Greenlandic", codes: ["kl"] },
+  { name: "Guarani", codes: ["gn"] },
+  { name: "Gujarati", codes: ["gu"] },
+  { name: "Haitian Creole", codes: ["ht"] },
+  { name: "Hausa", codes: ["ha"] },
+  { name: "Hebrew", codes: ["he"] },
+  { name: "Herero", codes: ["hz"] },
+  { name: "Hindi", codes: ["hi"] },
+  { name: "Hiri Motu", codes: ["ho"] },
+  { name: "Hungarian", codes: ["hu"] },
+  { name: "Icelandic", codes: ["is"] },
+  { name: "Ido", codes: ["io"] },
+  { name: "Igbo", codes: ["ig"] },
+  { name: "Indonesian", codes: ["id", "in"] },
+  { name: "Interlingua", codes: ["ia"] },
+  { name: "Interlingue", codes: ["ie"] },
+  { name: "Inuktitut", codes: ["iu"] },
+  { name: "Inupiak", codes: ["ik"] },
+  { name: "Irish", codes: ["ga"] },
+  { name: "Italian", codes: ["it"] },
+  { name: "Japanese", codes: ["ja"] },
+  { name: "Javanese", codes: ["jv"] },
+  { name: "Kannada", codes: ["kn"] },
+  { name: "Kanuri", codes: ["kr"] },
+  { name: "Kashmiri", codes: ["ks"] },
+  { name: "Kazakh", codes: ["kk"] },
+  { name: "Khmer", codes: ["km"] },
+  { name: "Kikuyu", codes: ["ki"] },
+  { name: "Kinyarwanda (Rwanda)", codes: ["rw"] },
+  { name: "Kirundi", codes: ["rn"] },
+  { name: "Kyrgyz", codes: ["ky"] },
+  { name: "Komi", codes: ["kv"] },
+  { name: "Kongo", codes: ["kg"] },
+  { name: "Korean", codes: ["ko"] },
+  { name: "Kurdish", codes: ["ku"] },
+  { name: "Kwanyama", codes: ["kj"] },
+  { name: "Lao", codes: ["lo"] },
+  { name: "Latin", codes: ["la"] },
+  { name: "Latvian (Lettish)", codes: ["lv"] },
+  { name: "Limburgish (Limburger)", codes: ["li"] },
+  { name: "Lingala", codes: ["ln"] },
+  { name: "Lithuanian", codes: ["lt"] },
+  { name: "Luga-Katanga", codes: ["lu"] },
+  { name: "Luganda, Ganda", codes: ["lg"] },
+  { name: "Luxembourgish", codes: ["lb"] },
+  { name: "Macedonian", codes: ["mk"] },
+  { name: "Malagasy", codes: ["mg"] },
+  { name: "Malay", codes: ["ms"] },
+  { name: "Malayalam", codes: ["ml"] },
+  { name: "Maltese", codes: ["mt"] },
+  { name: "Maori", codes: ["mi"] },
+  { name: "Marathi", codes: ["mr"] },
+  { name: "Marshallese", codes: ["mh"] },
+  { name: "Moldavian", codes: ["mo"] },
+  { name: "Mongolian", codes: ["mn"] },
+  { name: "Nauru", codes: ["na"] },
+  { name: "Navajo", codes: ["nv"] },
+  { name: "Ndonga", codes: ["ng"] },
+  { name: "Northern Ndebele", codes: ["nd"] },
+  { name: "Nepali", codes: ["ne"] },
+  { name: "Norwegian", codes: ["no"] },
+  { name: "Norwegian bokmål", codes: ["nb"] },
+  { name: "Norwegian nynorsk", codes: ["nn"] },
+  { name: "Nuosu", codes: ["ii"] },
+  { name: "Occitan", codes: ["oc"] },
+  { name: "Ojibwe", codes: ["oj"] },
+  { name: "Old Church Slavonic, Old Bulgarian", codes: ["cu"] },
+  { name: "Oriya", codes: ["or"] },
+  { name: "Oromo (Afaan Oromo)", codes: ["om"] },
+  { name: "Ossetian", codes: ["os"] },
+  { name: "Pāli", codes: ["pi"] },
+  { name: "Pashto, Pushto", codes: ["ps"] },
+  { name: "Persian (Farsi)", codes: ["fa"] },
+  { name: "Polish", codes: ["pl"] },
+  { name: "Portuguese", codes: ["pt"] },
+  { name: "Punjabi (Eastern)", codes: ["pa"] },
+  { name: "Quechua", codes: ["qu"] },
+  { name: "Romansh", codes: ["rm"] },
+  { name: "Romanian", codes: ["ro"] },
+  { name: "Russian", codes: ["ru"] },
+  { name: "Sami", codes: ["se"] },
+  { name: "Samoan", codes: ["sm"] },
+  { name: "Sango", codes: ["sg"] },
+  { name: "Sanskrit", codes: ["sa"] },
+  { name: "Serbian", codes: ["sr"] },
+  { name: "Serbo-Croatian", codes: ["sh"] },
+  { name: "Sesotho", codes: ["st"] },
+  { name: "Setswana", codes: ["tn"] },
+  { name: "Shona", codes: ["sn"] },
+  { name: "Sindhi", codes: ["sd"] },
+  { name: "Sinhalese", codes: ["si"] },
+  { name: "Siswati", codes: ["ss"] },
+  { name: "Slovak", codes: ["sk"] },
+  { name: "Slovenian", codes: ["sl"] },
+  { name: "Somali", codes: ["so"] },
+  { name: "Southern Ndebele", codes: ["nr"] },
+  { name: "Spanish", codes: ["es"] },
+  { name: "Sundanese", codes: ["su"] },
+  { name: "Swahili (Kiswahili)", codes: ["sw"] },
+  { name: "Swedish", codes: ["sv"] },
+  { name: "Tagalog", codes: ["tl"] },
+  { name: "Tahitian", codes: ["ty"] },
+  { name: "Tajik", codes: ["tg"] },
+  { name: "Tamil", codes: ["ta"] },
+  { name: "Tatar", codes: ["tt"] },
+  { name: "Telugu", codes: ["te"] },
+  { name: "Thai", codes: ["th"] },
+  { name: "Tibetan", codes: ["bo"] },
+  { name: "Tigrinya", codes: ["ti"] },
+  { name: "Tonga", codes: ["to"] },
+  { name: "Tsonga", codes: ["ts"] },
+  { name: "Turkish", codes: ["tr"] },
+  { name: "Turkmen", codes: ["tk"] },
+  { name: "Twi", codes: ["tw"] },
+  { name: "Uyghur", codes: ["ug"] },
+  { name: "Ukrainian", codes: ["uk"] },
+  { name: "Urdu", codes: ["ur"] },
+  { name: "Uzbek", codes: ["uz"] },
+  { name: "Venda", codes: ["ve"] },
+  { name: "Vietnamese", codes: ["vi"] },
+  { name: "Volapük", codes: ["vo"] },
+  { name: "Wallon", codes: ["wa"] },
+  { name: "Welsh", codes: ["cy"] },
+  { name: "Wolof", codes: ["wo"] },
+  { name: "Western Frisian", codes: ["fy"] },
+  { name: "Xhosa", codes: ["xh"] },
+  { name: "Yiddish", codes: ["yi", "ji"] },
+  { name: "Yoruba", codes: ["yo"] },
+  { name: "Zhuang, Chuang", codes: ["za"] },
+  { name: "Zulu", codes: ["zu"] },
+];
+
+const KNOWN_LANG_BASES = new Set(
+  LANG_TIPS
+    .flatMap(it => (it.codes || []))
+    .map(c => normalizeLangCode(c).split("-")[0])
+    .filter(Boolean)
+);
+
+function langTipMatches(query, limit = 2) {
+  const q = (query || "").trim().toLowerCase();
+  const score = (item) => {
+    const name = item.name.toLowerCase();
+    const codes = item.codes.map(c => c.toLowerCase());
+    if (!q) return 999;
+    if (codes.some(c => c === q)) return 0;
+    if (codes.some(c => c.startsWith(q))) return 1;
+    if (name.startsWith(q)) return 2;
+    if (name.includes(q)) return 3;
+    if (codes.some(c => c.includes(q))) return 4;
+    return 999;
+  };
+  return LANG_TIPS
+    .map(it => ({ it, s: score(it) }))
+    .filter(x => x.s < 999)
+    .sort((a, b) => a.s - b.s || a.it.name.localeCompare(b.it.name))
+    .slice(0, limit)
+    .map(x => x.it);
+}
+
+function renderLangTipsHTML(query) {
+  const hits = langTipMatches(query, 2);
+  const fallback = [
+    { name: "English", codes: ["en"] },
+    { name: "Japanese", codes: ["ja"] },
+    { name: "French", codes: ["fr"] },
+    { name: "German", codes: ["de"] },
+  ];
+  const items = (hits.length ? hits : fallback).slice(0, 2);
+  const parts = items.map(it => {
+    const code = (it.codes[0] || "").toLowerCase();
+    return `<span class="langTipMiniItem"><code>${escapeHtml(code)}</code><span class="langTipMiniSep">=</span>${escapeHtml(it.name)}</span>`;
+  }).join(`<span class="langTipMiniDot"> • </span>`);
+  return `<div class="langTipMini">${parts}</div>`;
+}
+
 function isPrimitive(v) {
   return v === null || v === undefined || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 }
 
 function looksLikeLangCode(s) {
   return LANG_CODE_RE.test((s || "").trim());
+}
+
+function looksLikeKnownLangBase(s) {
+  const base = normalizeLangCode((s || "").trim()).split("-")[0];
+  return !!base && KNOWN_LANG_BASES.has(base);
+}
+
+function looksLikeLangMapKeys(keys) {
+  // Prevent false positives in nested i18n files where many short keys exist (e.g. "hp", "ok", "top").
+  // Heuristic: language maps must look like language codes AND have known bases.
+  return Array.isArray(keys) &&
+    keys.length > 0 &&
+    keys.every(k => looksLikeLangCode(k)) &&
+    keys.every(k => looksLikeKnownLangBase(k));
+}
+
+function tryParseJSON(text, fileLabel = "") {
+  // Tries strict JSON first, then a lightweight JSONC-style fallback.
+  // This helps with translation files that include comments or trailing commas.
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Strip /* */ and // comments (best-effort), then trailing commas.
+    const noComments = String(text)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const noTrailingCommas = noComments
+      .replace(/,\s*(\}|\])/g, "$1");
+    try {
+      return JSON.parse(noTrailingCommas);
+    } catch {
+      throw new Error(fileLabel ? `Invalid JSON: ${fileLabel}` : "Invalid JSON file.");
+    }
+  }
+}
+
+function shouldSkipImportedKey(key) {
+  // Skip only root metadata keys from common i18n formats.
+  // Keep nested keys like "common.label" if they ever exist.
+  if (!key) return true;
+  if (key.includes(".")) return false;
+  return key === "label" || key === "alias";
 }
 
 function flattenNestedLangMaps(obj, prefix = "") {
@@ -287,7 +717,7 @@ function flattenNestedLangMaps(obj, prefix = "") {
     const isLangMap =
       !!path &&
       keys.length > 0 &&
-      keys.every(k => looksLikeLangCode(k)) &&
+      looksLikeLangMapKeys(keys) &&
       keys.every(k => isPrimitive(node[k]));
     if (isLangMap) {
       out[path] = node;
@@ -311,12 +741,76 @@ function flattenNestedValues(obj, prefix = "") {
       if (path) out[path] = node;
       return;
     }
-    if (!node || typeof node !== "object" || Array.isArray(node)) return;
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      // Preserve array positions to avoid collisions.
+      for (let i = 0; i < node.length; i++) {
+        const next = path ? `${path}[${i}]` : `[${i}]`;
+        walk(node[i], next);
+      }
+      return;
+    }
     for (const k of Object.keys(node)) {
       const next = path ? (path + "." + k) : k;
       walk(node[k], next);
     }
   }
+  walk(obj, prefix);
+  return out;
+}
+
+function flattenNestedValuesForLang(obj, lang, prefix = "") {
+  // Like flattenNestedValues, but if a nested object looks like a language-map
+  // (e.g. {en:"Battle", ja:"戦目"}), treat it as a leaf and pick the best value
+  // for the requested language.
+  const out = {};
+  const wanted = normalizeLangCode(lang);
+  const fallbackLang = normalizeLangCode(state?.settings?.defaultSourceLang || "en") || "en";
+
+  function pickFromLangMap(node) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+    const keys = Object.keys(node);
+    if (!looksLikeLangMapKeys(keys)) return undefined;
+    if (!keys.every(k => isPrimitive(node[k]))) return undefined;
+
+    const direct = wanted && Object.prototype.hasOwnProperty.call(node, wanted) ? node[wanted] : undefined;
+    if (isPrimitive(direct)) return direct;
+
+    const fallback = fallbackLang && Object.prototype.hasOwnProperty.call(node, fallbackLang) ? node[fallbackLang] : undefined;
+    if (isPrimitive(fallback)) return fallback;
+
+    const firstKey = keys[0];
+    const firstVal = node[firstKey];
+    return isPrimitive(firstVal) ? firstVal : undefined;
+  }
+
+  function walk(node, path) {
+    if (isPrimitive(node)) {
+      if (path) out[path] = node;
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+
+    const picked = pickFromLangMap(node);
+    if (picked !== undefined) {
+      if (path) out[path] = picked;
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) {
+        const next = path ? `${path}[${i}]` : `[${i}]`;
+        walk(node[i], next);
+      }
+      return;
+    }
+
+    for (const k of Object.keys(node)) {
+      const next = path ? (path + "." + k) : k;
+      walk(node[k], next);
+    }
+  }
+
   walk(obj, prefix);
   return out;
 }
@@ -349,7 +843,7 @@ function jsonToEntriesAndLangs(data) {
       if (!map || typeof map !== "object" || Array.isArray(map)) continue;
       const mk = Object.keys(map);
       if (!mk.length) continue;
-      if (!mk.every(looksLikeLangCode)) continue;
+      if (!looksLikeLangMapKeys(mk)) continue;
       if (!mk.every(langKey => isPrimitive(map[langKey]))) continue;
       flat[k] = map;
     }
@@ -393,9 +887,7 @@ function mergeEntries(into, from) {
 }
 
 function importJSONToProject(jsonText, projectName, fileName = "", forcedLang = "") {
-  let data;
-  try { data = JSON.parse(jsonText); }
-  catch { throw new Error("Invalid JSON file."); }
+  const data = tryParseJSON(jsonText, fileName || "");
   if (!data || typeof data !== "object") throw new Error("JSON root must be an object.");
 
   // First try translation-map JSON (single-file export style)
@@ -409,11 +901,11 @@ function importJSONToProject(jsonText, projectName, fileName = "", forcedLang = 
   } else {
     // Fallback: treat as single-language i18n file (multi-file export style)
     const lang = normalizeLangCode(forcedLang) || inferLangFromFileName(fileName) || state.settings.defaultSourceLang || "en";
-    const flatVals = flattenNestedValues(data);
+    const flatVals = flattenNestedValuesForLang(data, lang);
     for (const k of Object.keys(flatVals)) {
       const key = normalizeKey(k);
       if (!key) continue;
-      if (key === "label" || key === "alias") continue;
+      if (shouldSkipImportedKey(key)) continue;
       entries[key] = entries[key] || {};
       entries[key][lang] = (flatVals[k] ?? "").toString();
     }
@@ -438,29 +930,45 @@ async function importJSONFilesToProject(files, projectName) {
   const combinedEntries = {};
   const langsSet = new Set();
 
+  function unwrapSingleLangRoot(obj, inferredLang = "") {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { obj, lang: "" };
+    const ks = Object.keys(obj);
+    if (ks.length !== 1) return { obj, lang: "" };
+    const k = ks[0];
+    if (!looksLikeLangCode(k)) return { obj, lang: "" };
+    // Only unwrap if the wrapper key matches the filename language (to avoid accidental unwrapping like {"top": {...}}).
+    if (inferredLang && normalizeLangCode(k) !== normalizeLangCode(inferredLang)) return { obj, lang: "" };
+    const inner = obj[k];
+    if (!inner || typeof inner !== "object" || Array.isArray(inner)) return { obj, lang: "" };
+    return { obj: inner, lang: normalizeLangCode(k) };
+  }
+
   for (const file of files) {
     const text = await file.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch { throw new Error(`Invalid JSON: ${file.name}`); }
+    const data = tryParseJSON(text, file.name);
     if (!data || typeof data !== "object") throw new Error(`JSON root must be an object: ${file.name}`);
 
-    const parsed = jsonToEntriesAndLangs(data);
-    if (parsed) {
-      mergeEntries(combinedEntries, parsed.entries);
-      for (const l of parsed.langs) langsSet.add(l);
-      continue;
-    }
+    const inferredFromName = inferLangFromFileName(file.name);
+    const unwrapped = unwrapSingleLangRoot(data, inferredFromName);
+    const lang = unwrapped.lang || inferredFromName;
 
-    const lang = inferLangFromFileName(file.name);
     if (!lang) {
+      // If user didn't name files with language codes, allow a translation-map JSON as a fallback.
+      const parsed = jsonToEntriesAndLangs(data);
+      if (parsed) {
+        mergeEntries(combinedEntries, parsed.entries);
+        for (const l of parsed.langs) langsSet.add(l);
+        continue;
+      }
       throw new Error(`Cannot infer language from filename: ${file.name}. Name files like "en.json", "ja.json", "fr-ca.json".`);
     }
-    const flatVals = flattenNestedValues(data);
+
+    const flatVals = flattenNestedValuesForLang(unwrapped.obj, lang);
     const singleEntries = {};
     for (const k of Object.keys(flatVals)) {
       const key = normalizeKey(k);
       if (!key) continue;
+      if (shouldSkipImportedKey(key)) continue;
       singleEntries[key] = singleEntries[key] || {};
       singleEntries[key][lang] = (flatVals[k] ?? "").toString();
     }
@@ -610,17 +1118,72 @@ function render() {
   const p = currentProject();
   $("#pillProject").textContent = "Project: " + (p ? p.name : "—");
 
+  document.body.dataset.welcome = "false";
+
   const { path, arg } = route();
+  if ((path === "welcome") || (path === "list" && !state.ui.seenWelcome)) return renderWelcome();
   if (path === "settings") return renderSettings();
   if (path === "edit") return renderEdit(arg);
   return renderList();
+}
+
+function renderWelcome() {
+  document.body.dataset.welcome = "true";
+  $("#view").innerHTML = `
+    <div class="welcomeScreen">
+      <div class="welcomeCenter">
+        <div class="welcomeTitle">language-surface</div>
+        <button class="btn primary welcomeStartBtn" id="btnWelcomeStart" type="button">Start</button>
+      </div>
+    </div>
+  `;
+
+  $("#btnWelcomeStart").addEventListener("click", () => {
+    state.ui.seenWelcome = true;
+    saveState();
+    // If we're already on #list (but showing Welcome), hashchange won't fire.
+    if (location.hash === "#list") {
+      render();
+      return;
+    }
+    location.hash = "#list";
+  });
 }
 
 /* ---------- List View ---------- */
 function renderList() {
   const p = currentProject();
   if (!p) {
-    $("#view").innerHTML = `<div class="card"><div class="bd">No project found.</div></div>`;
+    $("#view").innerHTML = `
+      <div class="card">
+        <div class="hd">
+          <div><h2>No project found</h2></div>
+        </div>
+        <div class="bd">
+          <div class="hint">Create a new project or import files to get started.</div>
+
+          <div class="row" style="margin-top:12px;">
+            <div style="flex:1">
+              <label>Create new project</label>
+              <input id="inpNewProject" placeholder="Project name" />
+            </div>
+            <button class="btn primary" id="btnCreateProject" type="button">Create</button>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div style="flex:1">
+              <label>Import</label>
+              <div class="hint">Import creates a new project from your files.</div>
+            </div>
+            <button class="btn blue" id="btnImport" type="button">Import…</button>
+            <input type="file" id="fileImport" style="display:none" />
+          </div>
+        </div>
+      </div>
+    `;
+
+    bindCreateProjectControls();
+    bindImportControls();
     return;
   }
 
@@ -636,6 +1199,14 @@ function renderList() {
   const visibleLangs = state.ui.visibleLangs;
   const primaryLang = visibleLangs[0] || p.languages[0] || "";
   const cellMode = state.settings.cellDisplay || "clip";
+
+  const sortBy = (state.ui.listSortBy || "key").toString();
+  const sortDir = state.ui.listSortDir === "desc" ? "desc" : "asc";
+
+  const sortOptions = [
+    { value: "key", label: "Key" },
+    ...visibleLangs.map(l => ({ value: "lang:" + l, label: l.toUpperCase() }))
+  ];
 
   const PAGE_SIZES = [25, 50, 100, 200, 500, 1000];
   const normalizePageSize = (n) => (PAGE_SIZES.includes(n) ? n : 100);
@@ -658,7 +1229,7 @@ function renderList() {
     const keyFilter = (state.ui.listFilterKey || "").toLowerCase();
     const textFilter = (state.ui.listFilterText || "").toLowerCase();
 
-    return keysAll.filter((k) => {
+    const filtered = keysAll.filter((k) => {
       if (keyFilter && !k.toLowerCase().includes(keyFilter)) return false;
       if (!textFilter) return true;
       const row = entries[k] || {};
@@ -668,6 +1239,35 @@ function renderList() {
       }
       return false;
     });
+
+    const dirMul = sortDir === "desc" ? -1 : 1;
+
+    const cmpKey = (a, b) => a.localeCompare(b);
+    const cmpText = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });
+
+    if (sortBy === "key") {
+      filtered.sort((a, b) => dirMul * cmpKey(a, b));
+      return filtered;
+    }
+    if (sortBy.startsWith("lang:")) {
+      const lang = normalizeLangCode(sortBy.slice(5));
+      filtered.sort((a, b) => {
+        const av = (entries[a]?.[lang] ?? "").toString();
+        const bv = (entries[b]?.[lang] ?? "").toString();
+
+        const aEmpty = !av.trim();
+        const bEmpty = !bv.trim();
+        if (aEmpty && !bEmpty) return 1;
+        if (!aEmpty && bEmpty) return -1;
+
+        const c = cmpText(av, bv);
+        if (c) return dirMul * c;
+        return cmpKey(a, b);
+      });
+      return filtered;
+    }
+
+    return filtered;
   }
 
   function clampListPage(filteredCount) {
@@ -693,10 +1293,12 @@ function renderList() {
         const v = (entries[k] && entries[k][l]) ? entries[k][l] : "";
         const show = cellMode === "wrap" ? (v ?? "") : trimPreview(v);
         const w = Math.max(120, Math.min(800, Number(state.ui.colWidths[l] || 220)));
-        return `<td class="cell" data-col="${escapeHtml(l)}" title="${escapeHtml(v)}" style="width:${w}px">${escapeHtml(show)}</td>`;
+        const title = showControlSymbols(v);
+        const shown = showControlSymbols(show);
+        return `<td class="cell" data-col="${escapeHtml(l)}" title="${escapeHtml(title)}" style="width:${w}px">${escapeHtml(shown)}</td>`;
       }).join("");
       return `<tr>
-        <td><code>${escapeHtml(k)}</code></td>
+        <td class="keyCell" title="${escapeHtml(k)}"><code>${escapeHtml(k)}</code></td>
         ${cells}
         <td class="nowrap actionsCol">
           <button class="btn small" data-edit="${escapeHtml(k)}">Edit</button>
@@ -734,7 +1336,7 @@ function renderList() {
             </div>
             <div style="width:280px;">
               <label>Import</label>
-              <button class="btn" id="btnImport" type="button">Import…</button>
+              <button class="btn blue" id="btnImport" type="button">Import…</button>
               <input type="file" id="fileImport" style="display:none" />
             </div>
             <div style="flex:1; min-width:320px;">
@@ -757,6 +1359,7 @@ function renderList() {
                 <input id="inpNewLang" placeholder="e.g. fr-ca"/>
                 <button class="btn" id="btnAddLangQuick">Add</button>
               </div>
+              <div class="hint langHintStable" id="langHintQuick" style="margin-top:8px;"></div>
             </div>
           </div>
 
@@ -779,8 +1382,18 @@ function renderList() {
               </select>
             </div>
             <div class="rightTools" style="align-items:flex-end; justify-content:flex-end; flex:1;">
+              <div style="width:240px;">
+                <label>Sort</label>
+                <select id="selSortBy">
+                  ${sortOptions.map(o => `<option value="${escapeAttr(o.value)}" ${o.value === sortBy ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
+                </select>
+              </div>
+              <div style="width:140px;">
+                <label>Order</label>
+                <button class="btn" id="btnSortDir" type="button">${sortDir === "asc" ? "ASC" : "DES"}</button>
+              </div>
               <button class="btn small" id="btnPrevPage" type="button">Prev</button>
-              <div class="pill" id="lblPageInfo" style="white-space:nowrap;">Page 1 / 1</div>
+              <div class="pill pageInfoPill" id="lblPageInfo" style="white-space:nowrap;">Page 1 / 1</div>
               <button class="btn small" id="btnNextPage" type="button">Next</button>
             </div>
           </div>
@@ -788,10 +1401,8 @@ function renderList() {
           <div class="row" style="margin-top:12px;">
             <div></div>
             <div class="rightTools">
-              <button class="btn" id="btnExportCSV">Export CSV</button>
-              <button class="btn" id="btnExportSingleJSON">Export single JSON</button>
-              <button class="btn" id="btnExportMultiJSON">Export multiple JSON</button>
-              <button class="btn" id="btnBulkAI">AI bulk translate</button>
+              <button class="btn primary" id="btnExport" type="button">Export…</button>
+              <button class="btn ok" id="btnBulkAI">AI bulk translate</button>
             </div>
           </div>
 
@@ -799,12 +1410,14 @@ function renderList() {
             <table id="tblList">
               <thead>
                 <tr>
-                  <th style="width:240px;">Key</th>
+                  <th class="thSortable" data-sort="key" style="width:240px;">Key${sortBy === "key" ? (sortDir === "asc" ? " ▲" : " ▼") : ""}</th>
                   ${visibleLangs.map(l => {
     const w = Math.max(120, Math.min(800, Number(state.ui.colWidths[l] || 220)));
+    const isSort = sortBy === ("lang:" + l);
+    const arrow = isSort ? (sortDir === "asc" ? " ▲" : " ▼") : "";
     return `<th class="thResizable" data-col="${escapeHtml(l)}" style="width:${w}px;">
                       <div class="thInner">
-                        <span>${escapeHtml(l.toUpperCase())}</span>
+                        <span class="thSortable" data-sort="lang:${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}${arrow}</span>
                         <span class="colHandle" data-resize="${escapeAttr(l)}" title="Drag to resize"></span>
                       </div>
                     </th>`;
@@ -816,6 +1429,15 @@ function renderList() {
                 ${buildFilteredRowsHTML()}
               </tbody>
             </table>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div></div>
+            <div class="rightTools" style="align-items:flex-end; justify-content:flex-end;">
+              <button class="btn small" id="btnPrevPageBottom" type="button">Prev</button>
+              <div class="pill pageInfoPill" id="lblPageInfoBottom" style="white-space:nowrap;">Page 1 / 1</div>
+              <button class="btn small" id="btnNextPageBottom" type="button">Next</button>
+            </div>
           </div>
         </div>
       </div>
@@ -870,7 +1492,7 @@ function renderList() {
           <div class="footerCredit">
             <span class="footerName">Language Surface</span>
             <span class="footerSep">•</span>
-            <span>by Fernsugi</span>
+            <span>by fernsugi</span>
             <span class="footerSep">•</span>
             <a class="footerLink" href="https://github.com/fernsugi/language-surface" target="_blank" rel="noopener">GitHub</a>
           </div>
@@ -889,10 +1511,16 @@ function renderList() {
     const page = Math.max(0, Number(state.ui.listPage || 0) | 0);
     const lbl = $("#lblPageInfo");
     if (lbl) lbl.textContent = `Page ${page + 1} / ${totalPages} · ${filteredCount} keys`;
+    const lblB = $("#lblPageInfoBottom");
+    if (lblB) lblB.textContent = `Page ${page + 1} / ${totalPages} · ${filteredCount} keys`;
     const prev = $("#btnPrevPage");
     const next = $("#btnNextPage");
     if (prev) prev.disabled = page <= 0;
     if (next) next.disabled = page >= totalPages - 1;
+    const prevB = $("#btnPrevPageBottom");
+    const nextB = $("#btnNextPageBottom");
+    if (prevB) prevB.disabled = page <= 0;
+    if (nextB) nextB.disabled = page >= totalPages - 1;
   };
   const rerenderTbody = () => {
     if (!tbody) return;
@@ -926,20 +1554,54 @@ function renderList() {
     renderList();
   });
 
-  // prev/next
-  $("#btnPrevPage").addEventListener("click", () => {
-    state.ui.listPage = Math.max(0, (Number(state.ui.listPage || 0) | 0) - 1);
+  // sorting controls
+  $("#selSortBy").addEventListener("change", (e) => {
+    state.ui.listSortBy = (e.target.value || "key").toString();
+    state.ui.listPage = 0;
     saveState();
     renderList();
   });
-  $("#btnNextPage").addEventListener("click", () => {
+  $("#btnSortDir").addEventListener("click", () => {
+    state.ui.listSortDir = (state.ui.listSortDir === "desc") ? "asc" : "desc";
+    state.ui.listPage = 0;
+    saveState();
+    renderList();
+  });
+
+  // prev/next (top + bottom)
+  const goPrev = () => {
+    state.ui.listPage = Math.max(0, (Number(state.ui.listPage || 0) | 0) - 1);
+    saveState();
+    renderList();
+  };
+  const goNext = () => {
     const filteredCount = getFilteredKeys().length;
     const ps = getPageSize();
     const totalPages = Math.max(1, Math.ceil(filteredCount / ps));
     state.ui.listPage = Math.min(totalPages - 1, (Number(state.ui.listPage || 0) | 0) + 1);
     saveState();
     renderList();
-  });
+  };
+  $("#btnPrevPage").addEventListener("click", goPrev);
+  $("#btnNextPage").addEventListener("click", goNext);
+  $("#btnPrevPageBottom").addEventListener("click", goPrev);
+  $("#btnNextPageBottom").addEventListener("click", goNext);
+
+  // language code tips for quick add
+  const hintQuick = $("#langHintQuick");
+  const inpQuick = $("#inpNewLang");
+  const updateHintQuick = () => {
+    if (!hintQuick || !inpQuick) return;
+    const v = (inpQuick.value || "").trim();
+    const active = document.activeElement === inpQuick;
+    hintQuick.innerHTML = (active || v) ? renderLangTipsHTML(v) : "";
+  };
+  updateHintQuick();
+  if (inpQuick) {
+    inpQuick.addEventListener("input", updateHintQuick);
+    inpQuick.addEventListener("focus", updateHintQuick);
+    inpQuick.addEventListener("blur", updateHintQuick);
+  }
 
   // resizable columns (language headers)
   $("#tblList").addEventListener("mousedown", (e) => {
@@ -966,6 +1628,24 @@ function renderList() {
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  });
+
+  // sorting (click header label; ignore resize handle)
+  $("#tblList thead").addEventListener("click", (e) => {
+    if (e.target.closest("[data-resize]")) return;
+    const target = e.target.closest("[data-sort]");
+    if (!target) return;
+    const nextSortBy = (target.getAttribute("data-sort") || "").toString();
+    if (!nextSortBy) return;
+
+    if (state.ui.listSortBy === nextSortBy) {
+      state.ui.listSortDir = (state.ui.listSortDir === "desc") ? "asc" : "desc";
+    } else {
+      state.ui.listSortBy = nextSortBy;
+      state.ui.listSortDir = "asc";
+    }
+    saveState();
+    renderList();
   });
 
   // lang chips
@@ -1054,23 +1734,7 @@ function renderList() {
   });
 
   // create project
-  $("#btnCreateProject").addEventListener("click", () => {
-    const name = ($("#inpNewProject").value || "").trim() || "New Project";
-    const pid = nowId();
-    state.projects[pid] = {
-      id: pid,
-      name,
-      languages: ["en"],
-      entries: {},
-      meta: { createdAt: Date.now(), updatedAt: Date.now() }
-    };
-    state.ui.selectedProjectId = pid;
-    state.ui.visibleLangs = ["en"];
-    saveState();
-    $("#inpNewProject").value = "";
-    toast("Created project", name);
-    render();
-  });
+  bindCreateProjectControls();
 
   // duplicate
   $("#btnDuplicate").addEventListener("click", () => {
@@ -1097,125 +1761,40 @@ function renderList() {
     render();
   });
 
-  // import chooser
-  $("#btnImport").addEventListener("click", async () => {
-    const mode = await openChoiceModal({
-      title: "Import",
-      desc: "Choose the format you are importing.",
-      choices: [
-        { label: "CSV (single file)", value: "csv" },
-        { label: "Single JSON (nested translation map)", value: "single_json" },
-        { label: "Multiple JSON (one file per language)", value: "multi_json", hint: "Name files like en.json, ja.json, fr-ca.json" }
-      ]
-    });
-    if (!mode) return;
-
-    const inp = $("#fileImport");
-    inp.dataset.importMode = mode;
-    if (mode === "csv") {
-      inp.multiple = false;
-      inp.accept = ".csv,text/csv";
-    } else if (mode === "single_json") {
-      inp.multiple = false;
-      inp.accept = ".json,application/json";
-    } else {
-      inp.multiple = true;
-      inp.accept = ".json,application/json";
-    }
-    inp.click();
-  });
-
-  // import handler
-  $("#fileImport").addEventListener("change", async (e) => {
-    const mode = e.target.dataset.importMode || "";
-    const files = Array.from((e.target.files || [])).filter(Boolean);
-    if (!files.length) return;
-
-    const first = files[0];
-    const nameNoExt = first.name.replace(/\.[^.]+$/, "");
-    const ok = await openModal({
-      title: "Import",
-      desc: files.length > 1
-        ? `Import ${files.length} files as a new project.`
-        : `Import "${first.name}" as a new project.`,
-      bodyHTML: `
-        <label>Project name (optional)</label>
-        <input id="mImportName" placeholder="${escapeAttr(nameNoExt)}" />
-      `,
-      okText: "Import"
-    });
-    if (!ok) { e.target.value = ""; return; }
-    const projName = ($("#mImportName")?.value || "").trim() || nameNoExt;
-
-    try {
-      if (mode === "csv") {
-        if (files.length !== 1) throw new Error("CSV import supports a single file.");
-        const text = await first.text();
-        importCSVToProject(text, projName);
-      } else if (mode === "single_json") {
-        if (files.length !== 1) throw new Error("Single JSON import supports a single file.");
-        const text = await first.text();
-        // Decide whether this JSON is a translation-map (multi-language) or a per-language nested JSON.
-        let data;
-        try { data = JSON.parse(text); }
-        catch { throw new Error("Invalid JSON file."); }
-        const isTranslationMap = !!jsonToEntriesAndLangs(data);
-        if (isTranslationMap) {
-          importJSONToProject(text, projName, first.name);
-        } else {
-          const inferred = inferLangFromFileName(first.name) || state.settings.defaultSourceLang || "en";
-          const okLang = await openModal({
-            title: "Single-language JSON",
-            desc: "This file looks like a per-language nested JSON (values are strings). Choose which language to import it as.",
-            bodyHTML: `
-              <label>Language code</label>
-              <input id="mImportLang" placeholder="e.g. en" value="${escapeAttr(inferred)}" />
-              <div class="hint" style="margin-top:8px;">Tip: name the file like en.json / ja.json / fr-ca.json for auto-detect.</div>
-            `,
-            okText: "Import"
-          });
-          if (!okLang) throw new Error("Import cancelled.");
-          const lang = normalizeLangCode($("#mImportLang")?.value || "");
-          if (!lang) throw new Error("Language code is required.");
-          importJSONToProject(text, projName, first.name, lang);
-        }
-      } else if (mode === "multi_json") {
-        const bad = files.find(f => !f.name.toLowerCase().endsWith(".json"));
-        if (bad) throw new Error("Multi-file import supports JSON files only.");
-        await importJSONFilesToProject(files, projName);
-      } else {
-        throw new Error("Please choose an import type.");
-      }
-
-      toast("Imported project", projName);
-      render();
-    } catch (err) {
-      console.error(err);
-      toast("Import failed", err.message || String(err));
-    } finally {
-      e.target.value = "";
-      delete e.target.dataset.importMode;
-    }
-  });
+  bindImportControls();
 
   // export
-  $("#btnExportCSV").addEventListener("click", () => {
-    const csv = exportProjectCSV(p);
-    downloadFile(safeFileName(p.name) + ".csv", csv, "text/csv;charset=utf-8");
-    toast("Exported CSV", p.name);
-  });
-  $("#btnExportSingleJSON").addEventListener("click", () => {
-    const json = exportProjectSingleJSON(p);
-    downloadFile(safeFileName(p.name) + ".json", json, "application/json;charset=utf-8");
-    toast("Exported single JSON", p.name);
-  });
-  $("#btnExportMultiJSON").addEventListener("click", () => {
-    const files = exportProjectMultiJSON(p);
-    // download each
-    for (const f of files) {
-      downloadFile(f.name, f.content, "application/json;charset=utf-8");
+  $("#btnExport").addEventListener("click", async () => {
+    const choice = await openChoiceModal({
+      title: "Export",
+      desc: "Choose an export format.",
+      choices: [
+        { label: "CSV", value: "csv" },
+        { label: "Single JSON", value: "single_json" },
+        { label: "Multiple JSON", value: "multi_json" }
+      ]
+    });
+    if (!choice) return;
+
+    if (choice === "csv") {
+      const csv = exportProjectCSV(p);
+      downloadFile(safeFileName(p.name) + ".csv", csv, "text/csv;charset=utf-8");
+      toast("Exported CSV", p.name);
+      return;
     }
-    toast("Exported multiple JSON", `${files.length} file(s)`);
+    if (choice === "single_json") {
+      const json = exportProjectSingleJSON(p);
+      downloadFile(safeFileName(p.name) + ".json", json, "application/json;charset=utf-8");
+      toast("Exported single JSON", p.name);
+      return;
+    }
+    if (choice === "multi_json") {
+      const files = exportProjectMultiJSON(p);
+      for (const f of files) {
+        downloadFile(f.name, f.content, "application/json;charset=utf-8");
+      }
+      toast("Exported multiple JSON", `${files.length} file(s)`);
+    }
   });
 
   // AI bulk translate
@@ -1385,9 +1964,12 @@ function renderEdit(key) {
       <div class="card" style="margin-bottom:12px;">
         <div class="bd">
           <div class="row" style="align-items:flex-start;">
-            <div style="flex:1;">
+            <div style="flex:1; min-width:0;">
               <label>${escapeHtml(lang.toUpperCase())}</label>
               <textarea data-lang="${escapeHtml(lang)}" placeholder="Enter translation...">${escapeHtml(val)}</textarea>
+              <div class="hint visiblePreview">
+                Visible: <span class="muted" data-visible-for="${escapeAttr(lang)}">${escapeHtml(showControlSymbols(val))}</span>
+              </div>
             </div>
             <div style="width:210px;">
               <label>AI</label>
@@ -1410,11 +1992,14 @@ function renderEdit(key) {
   $("#view").innerHTML = `
     <div class="card">
       <div class="hd">
-        <div>
-          <h2>Edit <span class="pill unsaved" id="pillUnsaved" style="display:none;">UNSAVED</span></h2>
-          <button class="btn small" id="btnBack">Back</button>
+        <div class="editHdLeft">
+          <div class="editTitleRow">
+            <h2 style="margin:0;">Edit</h2>
+            <span class="pill unsaved" id="pillUnsaved" style="visibility:hidden; opacity:0;">UNSAVED</span>
+          </div>
         </div>
         <div class="rightTools">
+          <button class="btn" id="btnBack" type="button">Back</button>
           <button class="btn" id="btnAddLang">Add language</button>
           <button class="btn danger" id="btnDelLang">Delete language</button>
         </div>
@@ -1449,13 +2034,24 @@ function renderEdit(key) {
   const setDirty = (v) => {
     dirty = !!v;
     const pill = $("#pillUnsaved");
-    if (pill) pill.style.display = dirty ? "inline-flex" : "none";
+    if (pill) {
+      pill.style.visibility = dirty ? "visible" : "hidden";
+      pill.style.opacity = dirty ? "1" : "0";
+    }
   };
   setDirty(false);
 
   $("#inpKeyRename").addEventListener("input", () => setDirty(true));
   for (const ta of $$("textarea[data-lang]")) {
-    ta.addEventListener("input", () => setDirty(true));
+    ta.addEventListener("input", () => {
+      setDirty(true);
+      const lang = ta.getAttribute("data-lang") || "";
+      const el = $("[data-visible-for=\"" + cssEscape(lang) + "\"]");
+      if (el) {
+        const shown = showControlSymbols(ta.value);
+        el.textContent = shown;
+      }
+    });
   }
 
   // save all textareas into entry
@@ -1502,15 +2098,34 @@ function renderEdit(key) {
 
   // add language
   $("#btnAddLang").addEventListener("click", async () => {
-    const ok = await openModal({
+    const modalPromise = openModal({
       title: "Add language",
       desc: "Adds a language across ALL keys in the project.",
       bodyHTML: `
         <label>Language code</label>
         <input id="mLang" placeholder="e.g. fr, ko, zh-hant" />
+        <div class="hint langHintStable" id="mLangHint" style="margin-top:10px;"></div>
       `,
       okText: "Add"
     });
+
+    // Bind tips after modal renders
+    setTimeout(() => {
+      const inp = $("#mLang");
+      const hint = $("#mLangHint");
+      if (!inp || !hint) return;
+      const update = () => {
+        const v = (inp.value || "").trim();
+        const active = document.activeElement === inp;
+        hint.innerHTML = (active || v) ? renderLangTipsHTML(v) : "";
+      };
+      update();
+      inp.addEventListener("input", update);
+      inp.addEventListener("focus", update);
+      inp.addEventListener("blur", update);
+    }, 0);
+
+    const ok = await modalPromise;
     if (!ok) return;
     const lang = normalizeLangCode($("#mLang").value);
     if (!lang) return toast("Enter a language code.");
@@ -1617,6 +2232,11 @@ async function deleteLanguageFromProject(p, lang) {
 /* ---------- Settings View ---------- */
 function renderSettings() {
   const s = state.settings;
+  const p = currentProject();
+  const projectLangs = (p && Array.isArray(p.languages)) ? p.languages.slice() : [];
+  const selectedSrc = projectLangs.includes(normalizeLangCode(s.defaultSourceLang || ""))
+    ? normalizeLangCode(s.defaultSourceLang || "")
+    : (projectLangs[0] || "");
   $("#view").innerHTML = `
     <div class="card">
       <div class="hd">
@@ -1668,7 +2288,12 @@ function renderSettings() {
             </div>
             <div>
               <label>Default source language</label>
-              <input id="setSrcLang" value="${escapeAttr(s.defaultSourceLang || "en")}" />
+              <select id="setSrcLang" ${projectLangs.length ? "" : "disabled"}>
+                ${projectLangs.length
+      ? projectLangs.map(l => `<option value="${escapeAttr(l)}" ${l === selectedSrc ? "selected" : ""}>${escapeHtml(l.toUpperCase())}</option>`).join("")
+      : `<option value="" selected>No languages in project</option>`
+    }
+              </select>
             </div>
           </div>
 
@@ -1694,7 +2319,11 @@ function renderSettings() {
     state.settings.cellDisplay = $("#setCellDisplay").value === "wrap" ? "wrap" : "clip";
     state.settings.openaiApiKey = ($("#setKey").value || "").trim();
     state.settings.openaiModel = ($("#setModel").value || "").trim() || "gpt-4.1-mini";
-    state.settings.defaultSourceLang = normalizeLangCode($("#setSrcLang").value || "en") || "en";
+    const picked = normalizeLangCode($("#setSrcLang")?.value || "");
+    const langsNow = (currentProject() && Array.isArray(currentProject().languages)) ? currentProject().languages : [];
+    if (picked && langsNow.includes(picked)) {
+      state.settings.defaultSourceLang = picked;
+    }
     state.settings.defaultMaxChars = Math.max(0, Number($("#setMaxChars").value || 0));
     saveState();
     setTheme();
@@ -1721,6 +2350,16 @@ function trimPreview(s, max = 80) {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + "…";
 }
+
+function showControlSymbols(s) {
+  s = (s ?? "").toString();
+  // Render common control characters visibly (without changing underlying stored values).
+  // Note: order matters (handle CR before LF).
+  return s
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t");
+}
 function safeFileName(name) {
   return (name || "project").trim().replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "project";
 }
@@ -1740,6 +2379,6 @@ function cssEscape(str) { return (str ?? "").toString().replace(/"/g, '\\"'); }
 /* ---------- boot ---------- */
 (function boot() {
   // Ensure hash
-  if (!location.hash) location.hash = "#list";
+  if (!location.hash) location.hash = state.ui.seenWelcome ? "#list" : "#welcome";
   render();
 })();
