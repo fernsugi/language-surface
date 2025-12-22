@@ -1,5 +1,7 @@
 # 🌐 Language Surface
 
+Try it live <https://fernsugi.github.io/language-surface>
+
 **Language Surface** is a lightweight, local-first translation management tool  
 built for developers who want **simplicity, control, and zero backend**.
 
