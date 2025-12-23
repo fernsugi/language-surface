@@ -30,7 +30,7 @@ and is designed to be hosted on **GitHub Pages** or any static file host.
 - Clean, modern UI
 
 ### 📥 Import
-- CSV or JSON
+- CSV or JSON OR TXT
 - Automatic validation
 - Prompted project naming
 - Uses filename if name is empty
