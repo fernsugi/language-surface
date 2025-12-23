@@ -439,8 +439,8 @@ function bindImportControls() {
             <div class="hint" style="margin-top:8px;">Each line will become a key with this language's value.</div>
             <div style="margin-top:12px;">
               <label>Key prefix (optional)</label>
-              <input id="mTextKeyPrefix" placeholder="e.g. item, message" value="line" />
-              <div class="hint" style="margin-top:4px;">Keys will be named: prefix_1, prefix_2, etc.</div>
+              <input id="mTextKeyPrefix" placeholder="e.g. item, message" value="" />
+              <div class="hint" style="margin-top:4px;">Keys will be named: prefix_1, prefix_2, etc. (or just 1, 2, 3 if blank)</div>
             </div>
           `,
           okText: "Import"
@@ -449,7 +449,7 @@ function bindImportControls() {
         if (!okLang) throw new Error("Import cancelled.");
         const lang = normalizeLangCode($("#mTextLang")?.value || "");
         if (!lang) throw new Error("Language code is required.");
-        const keyPrefix = ($("#mTextKeyPrefix")?.value || "").trim() || "line";
+        const keyPrefix = ($("#mTextKeyPrefix")?.value || "").trim();
 
         if (isCurrentProject) {
           importTextToCurrentProject(lines, currProj, lang, keyPrefix);
@@ -1125,12 +1125,12 @@ async function importJSONFilesToProject(files, projectName) {
   saveState();
 }
 
-function importTextToProject(lines, projectName, lang, keyPrefix = "line") {
+function importTextToProject(lines, projectName, lang, keyPrefix = "") {
   const entries = {};
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-    const key = `${keyPrefix}_${i + 1}`;
+    const key = keyPrefix ? `${keyPrefix}_${i + 1}` : `${i + 1}`;
     entries[key] = { [lang]: line };
   }
 
@@ -1254,12 +1254,12 @@ async function importJSONFilesToCurrentProject(files, proj) {
   saveState();
 }
 
-function importTextToCurrentProject(lines, proj, lang, keyPrefix = "line") {
+function importTextToCurrentProject(lines, proj, lang, keyPrefix = "") {
   let addedKeys = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-    const key = `${keyPrefix}_${i + 1}`;
+    const key = keyPrefix ? `${keyPrefix}_${i + 1}` : `${i + 1}`;
     if (!proj.entries[key]) {
       proj.entries[key] = {};
       addedKeys++;
