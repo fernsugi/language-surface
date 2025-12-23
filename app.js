@@ -12,7 +12,7 @@ const DEFAULT_STATE = () => ({
     theme: "dark",
     cellDisplay: "clip", // clip | wrap
     openaiApiKey: "",
-    openaiModel: "gpt-4.1-mini",
+    openaiModel: "gpt-4o-mini",
     defaultMaxChars: 0,
     defaultSourceLang: "en",
     confirmDeletes: true,
@@ -75,6 +75,7 @@ function initState() {
       "lp.hello": { en: "Hello", ja: "こんにちは" },
       "lp.bye": { en: "Good Bye", ja: "さようなら" }
     },
+    translationRules: [], // [{from: "word", to: "translation"}, ...]
     meta: { createdAt: Date.now(), updatedAt: Date.now() }
   };
   st.ui.selectedProjectId = pid;
@@ -110,6 +111,7 @@ function openModal({ title = "Confirm", desc = "", bodyHTML = "", okText = "OK",
     $("#modalDesc").textContent = desc;
     $("#modalBody").innerHTML = bodyHTML || "";
     $("#modalOK").textContent = okText;
+    $("#modalOK").style.display = ""; // Reset display in case it was hidden
     $("#modalCancel").textContent = cancelText;
     $("#modalOK").className = "btn " + (danger ? "danger" : "primary");
     const back = $("#modalBack");
@@ -1039,22 +1041,46 @@ function downloadFile(filename, content, mime = "application/octet-stream") {
 async function openAITranslate({ sourceText, sourceLang, targetLang, maxChars = 0, extraContext = "" }) {
   const key = (state.settings.openaiApiKey || "").trim();
   if (!key) throw new Error("Missing API key. Add it in Settings.");
-  const model = (state.settings.openaiModel || "gpt-4.1-mini").trim();
+  const model = (state.settings.openaiModel || "gpt-4o-mini").trim();
 
   const limitLine = maxChars && Number(maxChars) > 0
     ? `- Output must be <= ${Number(maxChars)} characters.\n`
     : "";
 
+  // Get translation rules from current project (filtered by language pair)
+  const proj = currentProject();
+  const allRules = (proj && proj.translationRules) ? proj.translationRules : [];
+  // Filter rules that match this source→target language pair (or "all")
+  const rules = allRules.filter(r => {
+    const rSrc = (r.sourceLang || "").toLowerCase();
+    const rTgt = (r.targetLang || "").toLowerCase();
+    const srcMatch = rSrc === "all" || rSrc === normalizeLangCode(sourceLang);
+    const tgtMatch = rTgt === "all" || rTgt === normalizeLangCode(targetLang);
+    return srcMatch && tgtMatch;
+  });
+  let rulesSection = "";
+  if (rules.length > 0) {
+    const ruleLines = rules.map(r => `  "${r.from}" → "${r.to}"${r.from.includes("*") ? " (* = single character wildcard)" : ""}`).join("\n");
+    rulesSection = `- IMPORTANT: You MUST follow these translation rules exactly (glossary/terminology). Match words CASE-INSENSITIVELY (e.g. "hello", "Hello", "HELLO" all match). Preserve the original casing style in output when possible:
+${ruleLines}
+`;
+  }
+
   const prompt =
     `You are a professional localization translator.
-Translate the text from ${sourceLang} to ${targetLang}.
-Rules:
-- Keep placeholders intact (e.g. {name}, %s, %d, {{var}}, ${'${var}'}).
-- Keep punctuation style natural for the target language.
-${limitLine}${extraContext ? "- Extra context: " + extraContext + "\n" : ""}
-Return ONLY the translated text, no quotes, no explanations.
+Translate the text from ${sourceLang.toUpperCase()} to ${targetLang.toUpperCase()}.
 
-Text:
+CRITICAL RULES:
+- Output MUST be 100% in ${targetLang.toUpperCase()} script/characters ONLY.
+- Do NOT include ANY ${sourceLang.toUpperCase()} characters (hiragana, katakana, kanji, hangul, etc.) in output.
+- Translate EVERYTHING including common words, terms, and phrases.
+- TRANSLITERATE all names (people, places, characters) to ${targetLang.toUpperCase()} script. For example: Japanese katakana names like "イル・ミナ" must become Chinese characters like "伊尔·米娜", Korean names must be written in target script, etc.
+- Keep placeholders intact (e.g. {name}, %s, %d, {{var}}, ${'${var}'}, alphanumeric codes like "Rep.F").
+- Keep punctuation style appropriate for ${targetLang.toUpperCase()} and preserve line breaks (\\n).
+${limitLine}${rulesSection}${extraContext ? "- Extra context: " + extraContext + "\n" : ""}
+Return ONLY the translated text. No quotes, no explanations, no original text.
+
+Text to translate:
 ${sourceText}`;
 
   // Responses API (recommended for new projects)
@@ -1423,6 +1449,7 @@ function renderList() {
           <div class="row" style="margin-top:12px;">
             <div></div>
             <div class="rightTools">
+              <button class="btn small" id="btnClearLang" type="button">Clear</button>
               <button class="btn small" id="btnReplaceAll" type="button">Replace</button>
               <button class="btn primary" id="btnExport" type="button">Export…</button>
               <button class="btn ok" id="btnBulkAI">AI bulk translate</button>
@@ -1486,6 +1513,14 @@ function renderList() {
               <div class="hint">Makes a copy you can experiment with.</div>
             </div>
             <button class="btn" id="btnDuplicate">Duplicate</button>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div style="flex:1">
+              <label>Translation rules</label>
+              <div class="hint">Define word mappings AI must follow during translation.</div>
+            </div>
+            <button class="btn" id="btnRules">Rules (${(p.translationRules || []).length})</button>
           </div>
 
           <div class="row" style="margin-top:12px;">
@@ -1843,6 +1878,148 @@ function renderList() {
     render();
   });
 
+  // translation rules
+  $("#btnRules").addEventListener("click", async () => {
+    // Ensure rules array exists
+    if (!p.translationRules) p.translationRules = [];
+
+    const langOptions = `<option value="all">ALL</option>` + p.languages.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+
+    const renderRulesList = () => {
+      const rules = p.translationRules || [];
+      if (!rules.length) {
+        return '<div class="muted" style="text-align:center; padding:12px;">No rules yet. Add one below.</div>';
+      }
+      return rules.map((r, i) => `
+        <div class="row" style="margin-bottom:8px; padding:8px; background:rgba(255,255,255,.03); border-radius:8px;">
+          <div style="flex:1; font-size:13px;">
+            <span class="pill" style="font-size:10px; padding:2px 6px;">${escapeHtml((r.sourceLang || "?").toUpperCase())} → ${escapeHtml((r.targetLang || "?").toUpperCase())}</span>
+            <code style="margin-left:8px;">${escapeHtml(r.from)}</code>
+            <span class="muted" style="margin:0 8px;">→</span>
+            <code>${escapeHtml(r.to)}</code>
+          </div>
+          <button class="btn small danger ghost" data-delrule="${i}">×</button>
+        </div>
+      `).join("");
+    };
+
+    const showRulesModal = async () => {
+      const back = $("#modalBack");
+      $("#modalTitle").textContent = "Translation Rules";
+      $("#modalDesc").textContent = "AI will follow these word mappings during translation. Use * as wildcard for single character.";
+      $("#modalBody").innerHTML = `
+        <div id="rulesList" style="max-height:200px; overflow:auto; margin-bottom:12px;">
+          ${renderRulesList()}
+        </div>
+        <div style="padding-top:12px; border-top:1px solid var(--border);">
+          <div class="row" style="margin-bottom:8px;">
+            <div style="width:100px;">
+              <label>From lang</label>
+              <select id="mRuleSrcLang">${langOptions}</select>
+            </div>
+            <div style="width:100px;">
+              <label>To lang</label>
+              <select id="mRuleTgtLang">${langOptions}</select>
+            </div>
+          </div>
+          <div class="row" style="margin-bottom:8px;">
+            <div style="flex:1;">
+              <label>Source text</label>
+              <div class="inputWrap">
+                <input id="mRuleFrom" placeholder="Original word" />
+                <button type="button" class="inputClear" data-clear="mRuleFrom">×</button>
+              </div>
+            </div>
+            <div style="flex:1;">
+              <label>Translation</label>
+              <div class="inputWrap">
+                <input id="mRuleTo" placeholder="Translated word" />
+                <button type="button" class="inputClear" data-clear="mRuleTo">×</button>
+              </div>
+            </div>
+            <button class="btn primary" id="btnAddRule" style="align-self:flex-end;">Add</button>
+          </div>
+          <div class="hint">
+            Use * as wildcard for single character (e.g. "Lv.*" matches "Lv.1", "Lv.2", etc.)
+          </div>
+        </div>
+      `;
+      $("#modalOK").style.display = "none";
+      $("#modalCancel").textContent = "Close";
+      back.style.display = "flex";
+
+      // Set second language as default target if available
+      if (p.languages.length > 1) {
+        const tgtSelect = $("#mRuleTgtLang");
+        if (tgtSelect) tgtSelect.value = p.languages[1];
+      }
+
+      const updateList = () => {
+        const listEl = $("#rulesList");
+        if (listEl) listEl.innerHTML = renderRulesList();
+      };
+
+      // Add rule handler
+      const addRule = () => {
+        const sourceLang = ($("#mRuleSrcLang")?.value || "").trim().toLowerCase();
+        const targetLang = ($("#mRuleTgtLang")?.value || "").trim().toLowerCase();
+        const from = ($("#mRuleFrom")?.value || "").trim();
+        const to = ($("#mRuleTo")?.value || "").trim();
+        if (!sourceLang || !targetLang) return toast("Select languages.");
+        if (sourceLang === targetLang && sourceLang !== "all") return toast("Source and target must differ.");
+        if (!from) return toast("Enter source text.");
+        if (!to) return toast("Enter translation.");
+        // Check for duplicate (same from text + same language pair)
+        if (p.translationRules.some(r => r.from === from && r.sourceLang === sourceLang && r.targetLang === targetLang)) {
+          return toast("Rule already exists", from);
+        }
+        p.translationRules.push({ sourceLang, targetLang, from, to });
+        p.meta.updatedAt = Date.now();
+        saveState();
+        $("#mRuleFrom").value = "";
+        $("#mRuleTo").value = "";
+        updateList();
+        toast("Added rule", `${from} → ${to}`);
+      };
+
+      $("#btnAddRule").addEventListener("click", addRule);
+
+      // Delete rule handler
+      $("#modalBody").addEventListener("click", (e) => {
+        const delBtn = e.target.closest("[data-delrule]");
+        if (!delBtn) return;
+        const idx = parseInt(delBtn.getAttribute("data-delrule"), 10);
+        if (isNaN(idx) || idx < 0 || idx >= p.translationRules.length) return;
+        const removed = p.translationRules.splice(idx, 1)[0];
+        p.meta.updatedAt = Date.now();
+        saveState();
+        updateList();
+        toast("Removed rule", removed.from);
+      });
+
+      // Clear button handler
+      $("#modalBody").addEventListener("click", (e) => {
+        const clearBtn = e.target.closest("[data-clear]");
+        if (!clearBtn) return;
+        const targetId = clearBtn.getAttribute("data-clear");
+        const input = $("#" + targetId);
+        if (input) {
+          input.value = "";
+          input.focus();
+        }
+      });
+
+      // Close handler using onclick (not addEventListener to avoid stacking)
+      $("#modalCancel").onclick = () => {
+        back.style.display = "none";
+        $("#modalOK").style.display = ""; // Reset OK button
+        renderList(); // Refresh to update button count
+      };
+    };
+
+    await showRulesModal();
+  });
+
   // reset
   $("#btnReset").addEventListener("click", async () => {
     const ok = await confirmIfNeeded("Reset Language Surface? This wipes all app data stored in this browser.", true);
@@ -1854,6 +2031,75 @@ function renderList() {
   });
 
   bindImportControls();
+
+  // clear language translations (in filtered keys)
+  $("#btnClearLang").addEventListener("click", async () => {
+    const filteredKeys = getFilteredKeys();
+    const hasFilter = (state.ui.listFilterKey || "").trim() || (state.ui.listFilterText || "").trim();
+    const langOptions = p.languages.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+
+    const ok = await openModal({
+      title: "Clear translations",
+      desc: "Clear all translations for a language in filtered keys.",
+      bodyHTML: `
+        <div style="margin-bottom:12px; padding:10px; border-radius:10px; background:rgba(20,184,166,.1); border:1px solid rgba(20,184,166,.3);">
+          <strong>${filteredKeys.length}</strong> key(s) will be affected${hasFilter ? " (filtered)" : ""}.
+          ${hasFilter ? '<div class="hint" style="margin-top:4px;">Clear filters to affect all keys.</div>' : ""}
+        </div>
+        <div>
+          <label>Language to clear</label>
+          <select id="mClearLang">${langOptions}</select>
+        </div>
+        <div class="hint" style="margin-top:10px;">
+          This will set all translations for the selected language to empty strings.
+        </div>
+      `,
+      okText: "Next",
+      cancelText: "Cancel"
+    });
+    if (!ok) return;
+
+    const lang = normalizeLangCode($("#mClearLang")?.value || "");
+    if (!lang) return toast("Select a language.");
+
+    // Count non-empty translations
+    let nonEmptyCount = 0;
+    for (const k of filteredKeys) {
+      const val = (p.entries[k]?.[lang] ?? "").toString().trim();
+      if (val) nonEmptyCount++;
+    }
+
+    if (nonEmptyCount === 0) {
+      return toast("Nothing to clear", `${lang.toUpperCase()} is already empty in filtered keys.`);
+    }
+
+    // Confirmation modal
+    const confirmOk = await openModal({
+      title: "Confirm clear",
+      desc: `Clear all ${lang.toUpperCase()} translations?`,
+      bodyHTML: `
+        <div class="hint">
+          <strong>${nonEmptyCount}</strong> translation(s) will be cleared.
+        </div>
+        <div class="hint dangerText" style="margin-top:10px;">
+          This cannot be undone. Consider exporting first.
+        </div>
+      `,
+      okText: "Clear All",
+      cancelText: "Cancel",
+      danger: true
+    });
+    if (!confirmOk) return;
+
+    // Perform clear
+    for (const k of filteredKeys) {
+      p.entries[k][lang] = "";
+    }
+    p.meta.updatedAt = Date.now();
+    saveState();
+    toast("Cleared", `${nonEmptyCount} ${lang.toUpperCase()} translation(s)`);
+    renderList();
+  });
 
   // replace all (in filtered keys)
   $("#btnReplaceAll").addEventListener("click", async () => {
@@ -1982,10 +2228,16 @@ function renderList() {
     if (langs.length < 2) return toast("Add at least 2 languages to bulk translate.");
 
     const options = langs.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+    const filteredKeys = getFilteredKeys();
+    const hasFilter = (state.ui.listFilterKey || "").trim() || (state.ui.listFilterText || "").trim();
     const ok = await openModal({
       title: "AI bulk translate",
-      desc: "Choose a target language. Bulk translate runs key-by-key (one language at a time).",
+      desc: "Bulk translate runs key-by-key (one language at a time).",
       bodyHTML: `
+        <div style="margin-bottom:12px; padding:10px; border-radius:10px; background:rgba(20,184,166,.1); border:1px solid rgba(20,184,166,.3);">
+          <strong>${filteredKeys.length}</strong> key(s) will be processed${hasFilter ? " (filtered)" : ""}.
+          ${hasFilter ? '<div class="hint" style="margin-top:4px;">Clear filters to translate all keys.</div>' : ""}
+        </div>
         <div class="split">
           <div>
             <label>Source language</label>
@@ -2003,14 +2255,9 @@ function renderList() {
         <div class="hint" style="margin-top:10px;">
           Tip: set Source to your strongest language (commonly EN). If API key is missing, go to Settings.
         </div>
-        <div class="progressRow">
-          <div class="bar"><div id="mBar"></div></div>
-          <div class="muted nowrap" id="mProg">0%</div>
-        </div>
-        <div class="hint" id="mStatus" style="margin-top:8px;"></div>
       `,
       okText: "Start",
-      cancelText: "Close"
+      cancelText: "Cancel"
     });
     if (!ok) return;
 
@@ -2021,48 +2268,167 @@ function renderList() {
     if (src === tgt) return toast("Source and target must differ.");
     if (!proj.languages.includes(src) || !proj.languages.includes(tgt)) return toast("Invalid language selection.");
 
-    // Run
-    const keys = Object.keys(proj.entries).sort((a, b) => a.localeCompare(b));
+    // Open progress modal (non-blocking)
+    const back = $("#modalBack");
+    const modalCancel = $("#modalCancel");
+    const modalOK = $("#modalOK");
+
+    // Reset modal state completely
+    modalOK.style.display = "none";
+    modalCancel.textContent = "Cancel";
+    modalCancel.disabled = false;
+
+    // Remove any existing listeners by cloning
+    const newModalCancel = modalCancel.cloneNode(true);
+    modalCancel.parentNode.replaceChild(newModalCancel, modalCancel);
+
+    $("#modalTitle").textContent = "Translating...";
+    $("#modalDesc").textContent = `${src.toUpperCase()} → ${tgt.toUpperCase()}`;
+    $("#modalBody").innerHTML = `
+      <div style="margin-bottom:12px; padding:10px; border-radius:10px; background:rgba(251,191,36,.1); border:1px solid rgba(251,191,36,.4); font-size:12px;">
+        <strong>Do not close this tab</strong> while translation is in progress. Your work is saved after each translation.
+      </div>
+      <div class="progressRow">
+        <div class="bar"><div id="mBar" style="width:0%"></div></div>
+        <div class="muted nowrap" id="mProg">0%</div>
+      </div>
+      <div id="mStatus" style="margin-top:10px; font-size:13px;"></div>
+      <div id="mCurrentKey" style="margin-top:6px; font-size:12px; color:var(--muted); word-break:break-all;"></div>
+    `;
+    back.style.display = "flex";
+
+    let cancelled = false;
+    const cancelBtn = $("#modalCancel");
+    cancelBtn.onclick = () => {
+      cancelled = true;
+      cancelBtn.textContent = "Cancelling...";
+      cancelBtn.disabled = true;
+    };
+
+    const updateProgress = (done, total, status, currentKey = "") => {
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const bar = $("#mBar");
+      const prog = $("#mProg");
+      const statusEl = $("#mStatus");
+      const keyEl = $("#mCurrentKey");
+      if (bar) bar.style.width = pct + "%";
+      if (prog) prog.textContent = `${pct}% (${done}/${total})`;
+      if (statusEl) statusEl.textContent = status;
+      if (keyEl) keyEl.textContent = currentKey ? `Key: ${currentKey}` : "";
+    };
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    const translateWithRetry = async (params, maxRetries = 5) => {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        if (cancelled) throw new Error("Cancelled by user");
+        try {
+          return await openAITranslate(params);
+        } catch (err) {
+          const errMsg = err.message || String(err);
+
+          // Check for CORS/network errors (usually means we're blocked)
+          if (errMsg.includes("Failed to fetch") || errMsg.includes("CORS") || errMsg.includes("NetworkError")) {
+            throw new Error("Network error - you may be rate limited. Please wait a few minutes and try again.");
+          }
+
+          // Check for rate limit error
+          if (errMsg.includes("429") || errMsg.toLowerCase().includes("rate limit")) {
+            // Extract wait time from error message if available
+            const waitMatch = errMsg.match(/try again in (\d+)s/i);
+            const waitTime = waitMatch ? (parseInt(waitMatch[1], 10) + 2) * 1000 : (attempt * 15000);
+
+            if (attempt < maxRetries) {
+              updateProgress(done, total, `Rate limited. Waiting ${Math.round(waitTime/1000)}s before retry (${attempt}/${maxRetries})...`, params.key || "");
+              await sleep(waitTime);
+              continue;
+            }
+          }
+          throw err;
+        }
+      }
+    };
+
+    // Run (use filtered keys)
+    const keys = filteredKeys;
     const total = keys.length;
     let done = 0;
+    let translated = 0;
+    let skipped = 0;
 
     for (const k of keys) {
+      if (cancelled) {
+        updateProgress(done, total, "Cancelled by user.");
+        break;
+      }
+
       const srcText = (proj.entries[k][src] || "").trim();
       const tgtText = (proj.entries[k][tgt] || "").trim();
 
-      $("#mStatus").textContent = `Translating ${k} (${done + 1}/${total})...`;
       if (!srcText) {
         done++;
-        updateModalProgress(done, total);
+        skipped++;
+        updateProgress(done, total, `Skipped (no source): ${skipped} | Translated: ${translated}`, k);
         continue;
       }
       // If already has translation, skip (keep user edits)
       if (tgtText) {
         done++;
-        updateModalProgress(done, total);
+        skipped++;
+        updateProgress(done, total, `Skipped (already translated): ${skipped} | Translated: ${translated}`, k);
         continue;
       }
+
+      updateProgress(done, total, `Translating... | Translated: ${translated} | Skipped: ${skipped}`, k);
+
       try {
-        const out = await openAITranslate({
+        const out = await translateWithRetry({
           sourceText: srcText,
           sourceLang: src,
           targetLang: tgt,
-          maxChars
+          maxChars,
+          key: k
         });
         proj.entries[k][tgt] = out;
         proj.meta.updatedAt = Date.now();
         saveState();
+        translated++;
       } catch (err) {
         console.error(err);
-        toast("Bulk AI stopped", err.message || String(err));
-        $("#mStatus").textContent = "Stopped due to error.";
+        updateProgress(done, total, `Error: ${err.message || String(err)}`, k);
+        // Setup close button for error state
+        const errCloseBtn = $("#modalCancel");
+        errCloseBtn.textContent = "Close";
+        errCloseBtn.disabled = false;
+        errCloseBtn.onclick = () => {
+          back.style.display = "none";
+          $("#modalOK").style.display = "";
+        };
+        toast("Translation stopped", `${translated} translated before error`);
+        renderList();
         return;
       }
       done++;
-      updateModalProgress(done, total);
+      updateProgress(done, total, `Translating... | Translated: ${translated} | Skipped: ${skipped}`, k);
     }
-    $("#mStatus").textContent = "Done.";
-    toast("Bulk translate complete", `${tgt.toUpperCase()} filled where empty`);
+
+    // Done
+    if (!cancelled) {
+      updateProgress(total, total, `Done! Translated: ${translated} | Skipped: ${skipped}`, "");
+      toast("Bulk translate complete", `${translated} translated, ${skipped} skipped`);
+    } else {
+      toast("Bulk translate cancelled", `${translated} translated before cancel`);
+    }
+
+    // Setup close button using onclick (not addEventListener to avoid stacking)
+    const closeBtn = $("#modalCancel");
+    closeBtn.textContent = "Close";
+    closeBtn.disabled = false;
+    closeBtn.onclick = () => {
+      back.style.display = "none";
+      $("#modalOK").style.display = ""; // Reset OK button
+    };
+
     renderList();
   });
 }
@@ -2403,7 +2769,25 @@ function renderSettings() {
           <div class="split" style="margin-top:10px;">
             <div>
               <label>Model</label>
-              <input id="setModel" value="${escapeAttr(s.openaiModel || "gpt-4.1-mini")}" />
+              <select id="setModel">
+                <optgroup label="GPT-4o">
+                  <option value="gpt-4o" ${s.openaiModel === "gpt-4o" ? "selected" : ""}>gpt-4o (flagship)</option>
+                  <option value="gpt-4o-mini" ${(s.openaiModel === "gpt-4o-mini" || s.openaiModel === "gpt-4.1-mini" || !s.openaiModel) ? "selected" : ""}>gpt-4o-mini (fast, cheap)</option>
+                </optgroup>
+                <optgroup label="GPT-4">
+                  <option value="gpt-4-turbo" ${s.openaiModel === "gpt-4-turbo" ? "selected" : ""}>gpt-4-turbo</option>
+                  <option value="gpt-4" ${s.openaiModel === "gpt-4" ? "selected" : ""}>gpt-4</option>
+                </optgroup>
+                <optgroup label="GPT-3.5">
+                  <option value="gpt-3.5-turbo" ${s.openaiModel === "gpt-3.5-turbo" ? "selected" : ""}>gpt-3.5-turbo</option>
+                </optgroup>
+                <optgroup label="Reasoning (o-series)">
+                  <option value="o1" ${s.openaiModel === "o1" ? "selected" : ""}>o1</option>
+                  <option value="o1-mini" ${s.openaiModel === "o1-mini" ? "selected" : ""}>o1-mini</option>
+                  <option value="o1-preview" ${s.openaiModel === "o1-preview" ? "selected" : ""}>o1-preview</option>
+                  <option value="o3-mini" ${s.openaiModel === "o3-mini" ? "selected" : ""}>o3-mini</option>
+                </optgroup>
+              </select>
             </div>
             <div>
               <label>Default source language</label>
@@ -2455,7 +2839,7 @@ function renderSettings() {
     state.settings.confirmDeletes = $("#setConfirm").value === "yes";
     state.settings.cellDisplay = $("#setCellDisplay").value === "wrap" ? "wrap" : "clip";
     state.settings.openaiApiKey = ($("#setKey").value || "").trim();
-    state.settings.openaiModel = ($("#setModel").value || "").trim() || "gpt-4.1-mini";
+    state.settings.openaiModel = $("#setModel").value || "gpt-4o-mini";
     const picked = normalizeLangCode($("#setSrcLang")?.value || "");
     const langsNow = (currentProject() && Array.isArray(currentProject().languages)) ? currentProject().languages : [];
     if (picked && langsNow.includes(picked)) {
