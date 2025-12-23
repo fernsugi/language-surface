@@ -28,6 +28,7 @@ const DEFAULT_STATE = () => ({
     listSortBy: "key", // "key" | "lang:<code>"
     listSortDir: "asc", // "asc" | "desc"
     colWidths: {},
+    lockedKeys: [], // keys locked to top (not affected by sort/filter)
   },
   projects: {}
 });
@@ -1228,8 +1229,13 @@ function renderList() {
   function getFilteredKeys() {
     const keyFilter = (state.ui.listFilterKey || "").toLowerCase();
     const textFilter = (state.ui.listFilterText || "").toLowerCase();
+    const lockedKeys = (state.ui.lockedKeys || []).filter(k => p.entries[k]);
 
-    const filtered = keysAll.filter((k) => {
+    // Separate locked and unlocked keys
+    const lockedSet = new Set(lockedKeys);
+    const unlockedKeys = keysAll.filter(k => !lockedSet.has(k));
+
+    const filtered = unlockedKeys.filter((k) => {
       if (keyFilter && !k.toLowerCase().includes(keyFilter)) return false;
       if (!textFilter) return true;
       const row = entries[k] || {};
@@ -1247,9 +1253,7 @@ function renderList() {
 
     if (sortBy === "key") {
       filtered.sort((a, b) => dirMul * cmpKey(a, b));
-      return filtered;
-    }
-    if (sortBy.startsWith("lang:")) {
+    } else if (sortBy.startsWith("lang:")) {
       const lang = normalizeLangCode(sortBy.slice(5));
       filtered.sort((a, b) => {
         const av = (entries[a]?.[lang] ?? "").toString();
@@ -1264,10 +1268,10 @@ function renderList() {
         if (c) return dirMul * c;
         return cmpKey(a, b);
       });
-      return filtered;
     }
 
-    return filtered;
+    // Locked keys always at top (in their original order), not affected by filter/sort
+    return [...lockedKeys, ...filtered];
   }
 
   function clampListPage(filteredCount) {
@@ -1287,8 +1291,10 @@ function renderList() {
     const ps = getPageSize();
     const start = state.ui.listPage * ps;
     const pageKeys = filteredKeys.slice(start, start + ps);
+    const lockedSet = new Set(state.ui.lockedKeys || []);
 
     const rows = pageKeys.map(k => {
+      const isLocked = lockedSet.has(k);
       const cells = visibleLangs.map(l => {
         const v = (entries[k] && entries[k][l]) ? entries[k][l] : "";
         const show = cellMode === "wrap" ? (v ?? "") : trimPreview(v);
@@ -1297,10 +1303,13 @@ function renderList() {
         const shown = showControlSymbols(show);
         return `<td class="cell" data-col="${escapeHtml(l)}" title="${escapeHtml(title)}" style="width:${w}px">${escapeHtml(shown)}</td>`;
       }).join("");
-      return `<tr>
-        <td class="keyCell" title="${escapeHtml(k)}"><code>${escapeHtml(k)}</code></td>
+      const lockIcon = isLocked ? "🔒" : "📌";
+      const lockTitle = isLocked ? "Unlock (remove from top)" : "Lock to top";
+      return `<tr${isLocked ? ' style="background:rgba(20,184,166,.08);"' : ""}>
+        <td class="keyCell" title="Click to copy" data-copykey="${escapeHtml(k)}" style="cursor:pointer;"><code>${escapeHtml(k)}</code></td>
         ${cells}
         <td class="nowrap actionsCol">
+          <button class="btn small" data-lock="${escapeHtml(k)}" title="${lockTitle}">${lockIcon}</button>
           <button class="btn small" data-edit="${escapeHtml(k)}">Edit</button>
           <button class="btn small danger ghost" data-delkey="${escapeHtml(k)}">Delete</button>
         </td>
@@ -1342,9 +1351,13 @@ function renderList() {
             <div style="flex:1; min-width:320px;">
               <label>New key</label>
               <div class="row" style="margin-bottom:0;">
-                <input id="inpNewKey" placeholder="lp.welcome.title" />
+                <div class="inputWrap" style="flex:1;">
+                  <input id="inpNewKey" placeholder="lp.welcome.title" />
+                  <button type="button" class="inputClear" data-clear="inpNewKey">×</button>
+                </div>
                 <button class="btn primary" id="btnAddKey">Add</button>
               </div>
+              <div class="hint langHintStable" id="keyHint" style="margin-top:6px;"></div>
             </div>
           </div>
 
@@ -1356,7 +1369,10 @@ function renderList() {
             <div style="width:280px;">
               <label>Add language</label>
               <div class="row" style="margin-bottom:0;">
-                <input id="inpNewLang" placeholder="e.g. fr-ca"/>
+                <div class="inputWrap" style="flex:1;">
+                  <input id="inpNewLang" placeholder="e.g. fr-ca"/>
+                  <button type="button" class="inputClear" data-clear="inpNewLang">×</button>
+                </div>
                 <button class="btn" id="btnAddLangQuick">Add</button>
               </div>
               <div class="hint langHintStable" id="langHintQuick" style="margin-top:8px;"></div>
@@ -1366,11 +1382,17 @@ function renderList() {
           <div class="row" style="align-items:flex-end;">
             <div style="flex:1; min-width:260px;">
               <label>Filter key</label>
-              <input id="inpFilterKey" placeholder="e.g. common." value="${escapeAttr(state.ui.listFilterKey || "")}" />
+              <div class="inputWrap">
+                <input id="inpFilterKey" placeholder="e.g. common." value="${escapeAttr(state.ui.listFilterKey || "")}" />
+                <button type="button" class="inputClear" data-clear="inpFilterKey">×</button>
+              </div>
             </div>
             <div style="flex:1; min-width:260px;">
               <label>Filter translation (any selected language)</label>
-              <input id="inpFilterText" placeholder="Search text…" value="${escapeAttr(state.ui.listFilterText || "")}" />
+              <div class="inputWrap">
+                <input id="inpFilterText" placeholder="Search text…" value="${escapeAttr(state.ui.listFilterText || "")}" />
+                <button type="button" class="inputClear" data-clear="inpFilterText">×</button>
+              </div>
             </div>
           </div>
 
@@ -1401,6 +1423,7 @@ function renderList() {
           <div class="row" style="margin-top:12px;">
             <div></div>
             <div class="rightTools">
+              <button class="btn small" id="btnReplaceAll" type="button">Replace</button>
               <button class="btn primary" id="btnExport" type="button">Export…</button>
               <button class="btn ok" id="btnBulkAI">AI bulk translate</button>
             </div>
@@ -1545,6 +1568,18 @@ function renderList() {
     rerenderTbody();
   });
 
+  // clear buttons for inputs
+  $("#view").addEventListener("click", (e) => {
+    const clearBtn = e.target.closest("[data-clear]");
+    if (!clearBtn) return;
+    const targetId = clearBtn.getAttribute("data-clear");
+    const input = $("#" + targetId);
+    if (!input) return;
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  });
+
   // page size
   $("#selPageSize").addEventListener("change", (e) => {
     const n = Number(e.target.value || 100);
@@ -1601,6 +1636,37 @@ function renderList() {
     inpQuick.addEventListener("input", updateHintQuick);
     inpQuick.addEventListener("focus", updateHintQuick);
     inpQuick.addEventListener("blur", updateHintQuick);
+  }
+
+  // key hints (show 1-2 existing keys as reference)
+  const keyHint = $("#keyHint");
+  const inpNewKey = $("#inpNewKey");
+  const renderKeyHintsHTML = (query) => {
+    const q = (query || "").trim().toLowerCase();
+    // Get up to 2 existing keys that match the query prefix
+    const matches = keysAll
+      .filter(k => !q || k.toLowerCase().startsWith(q) || k.toLowerCase().includes(q))
+      .slice(0, 2);
+    if (!matches.length && !q) {
+      // Show first 2 keys as examples when empty
+      const examples = keysAll.slice(0, 2);
+      if (!examples.length) return "";
+      return `<span class="muted">e.g.</span> ${examples.map(k => `<code>${escapeHtml(k)}</code>`).join(", ")}`;
+    }
+    if (!matches.length) return "";
+    return matches.map(k => `<code>${escapeHtml(k)}</code>`).join(", ");
+  };
+  const updateKeyHint = () => {
+    if (!keyHint || !inpNewKey) return;
+    const v = (inpNewKey.value || "").trim();
+    const active = document.activeElement === inpNewKey;
+    keyHint.innerHTML = active ? renderKeyHintsHTML(v) : "";
+  };
+  updateKeyHint();
+  if (inpNewKey) {
+    inpNewKey.addEventListener("input", updateKeyHint);
+    inpNewKey.addEventListener("focus", updateKeyHint);
+    inpNewKey.addEventListener("blur", updateKeyHint);
   }
 
   // resizable columns (language headers)
@@ -1673,7 +1739,7 @@ function renderList() {
     location.hash = "#edit/" + encodeURIComponent(k);
   });
 
-  // edit & delete key
+  // edit, delete, lock, copy key
   $("#view").addEventListener("click", async (e) => {
     const edit = e.target.closest("[data-edit]");
     if (edit) {
@@ -1686,10 +1752,36 @@ function renderList() {
       const ok = await confirmIfNeeded(`Delete key "${k}"? This removes it from the project.`, true);
       if (!ok) return;
       delete p.entries[k];
+      // Also remove from locked keys if present
+      state.ui.lockedKeys = (state.ui.lockedKeys || []).filter(lk => lk !== k);
       p.meta.updatedAt = Date.now();
       saveState();
       toast("Deleted key", k);
       renderList();
+    }
+    const lock = e.target.closest("[data-lock]");
+    if (lock) {
+      const k = lock.getAttribute("data-lock");
+      const locked = state.ui.lockedKeys || [];
+      if (locked.includes(k)) {
+        state.ui.lockedKeys = locked.filter(lk => lk !== k);
+        toast("Unlocked", k);
+      } else {
+        state.ui.lockedKeys = [...locked, k];
+        toast("Locked to top", k);
+      }
+      saveState();
+      rerenderTbody();
+    }
+    const copyKey = e.target.closest("[data-copykey]");
+    if (copyKey) {
+      const k = copyKey.getAttribute("data-copykey");
+      try {
+        await navigator.clipboard.writeText(k);
+        toast("Copied", k);
+      } catch (err) {
+        toast("Copy failed", err.message || String(err));
+      }
     }
   });
 
@@ -1762,6 +1854,91 @@ function renderList() {
   });
 
   bindImportControls();
+
+  // replace all (in filtered keys)
+  $("#btnReplaceAll").addEventListener("click", async () => {
+    const langOptions = visibleLangs.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+    const ok = await openModal({
+      title: "Replace text",
+      desc: "Replace text in filtered keys (visible languages only).",
+      bodyHTML: `
+        <div style="margin-bottom:10px;">
+          <label>Language</label>
+          <select id="mReplaceLang">${langOptions}</select>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label>Find</label>
+          <input id="mReplaceFind" placeholder="Text to find..." />
+        </div>
+        <div>
+          <label>Replace with</label>
+          <input id="mReplaceWith" placeholder="Replacement text..." />
+        </div>
+        <div class="hint" style="margin-top:10px;">
+          This will only affect keys matching the current filter.
+        </div>
+      `,
+      okText: "Preview",
+      cancelText: "Cancel"
+    });
+    if (!ok) return;
+
+    const lang = normalizeLangCode($("#mReplaceLang")?.value || "");
+    const findText = $("#mReplaceFind")?.value || "";
+    const replaceWith = $("#mReplaceWith")?.value || "";
+
+    if (!lang) return toast("Select a language.");
+    if (!findText) return toast("Enter text to find.");
+
+    // Get filtered keys and count matches
+    const filteredKeys = getFilteredKeys();
+    let matchCount = 0;
+    let keyCount = 0;
+    const affectedKeys = [];
+
+    for (const k of filteredKeys) {
+      const val = (p.entries[k]?.[lang] ?? "").toString();
+      if (val.includes(findText)) {
+        const occurrences = val.split(findText).length - 1;
+        matchCount += occurrences;
+        keyCount++;
+        affectedKeys.push(k);
+      }
+    }
+
+    if (keyCount === 0) {
+      return toast("No matches found", `"${findText}" not found in ${lang.toUpperCase()}`);
+    }
+
+    // Confirmation modal
+    const confirmOk = await openModal({
+      title: "Confirm replace",
+      desc: `Replace "${findText}" with "${replaceWith}" in ${lang.toUpperCase()}?`,
+      bodyHTML: `
+        <div class="hint">
+          <strong>${matchCount}</strong> occurrence(s) in <strong>${keyCount}</strong> key(s) will be replaced.
+        </div>
+        <div style="margin-top:10px; max-height:150px; overflow:auto; font-size:12px;">
+          ${affectedKeys.slice(0, 10).map(k => `<div><code>${escapeHtml(k)}</code></div>`).join("")}
+          ${affectedKeys.length > 10 ? `<div class="muted">...and ${affectedKeys.length - 10} more</div>` : ""}
+        </div>
+      `,
+      okText: "Replace All",
+      cancelText: "Cancel",
+      danger: true
+    });
+    if (!confirmOk) return;
+
+    // Perform replacement
+    for (const k of affectedKeys) {
+      const val = (p.entries[k]?.[lang] ?? "").toString();
+      p.entries[k][lang] = val.split(findText).join(replaceWith);
+    }
+    p.meta.updatedAt = Date.now();
+    saveState();
+    toast("Replaced", `${matchCount} occurrence(s) in ${keyCount} key(s)`);
+    renderList();
+  });
 
   // export
   $("#btnExport").addEventListener("click", async () => {
@@ -1999,9 +2176,8 @@ function renderEdit(key) {
           </div>
         </div>
         <div class="rightTools">
+          <button class="btn primary" id="btnSaveAllTop">Save</button>
           <button class="btn" id="btnBack" type="button">Back</button>
-          <button class="btn" id="btnAddLang">Add language</button>
-          <button class="btn danger" id="btnDelLang">Delete language</button>
         </div>
       </div>
       <div class="bd">
@@ -2054,8 +2230,8 @@ function renderEdit(key) {
     });
   }
 
-  // save all textareas into entry
-  $("#btnSaveAll").addEventListener("click", () => {
+  // save all textareas into entry (both top and bottom buttons)
+  const handleSave = () => {
     const tas = $$("textarea[data-lang]");
     for (const ta of tas) {
       const lang = ta.getAttribute("data-lang");
@@ -2065,8 +2241,11 @@ function renderEdit(key) {
     saveState();
     toast("Saved", key);
     setDirty(false);
-    renderEdit(key);
-  });
+    // Auto back to list after save
+    location.hash = "#list";
+  };
+  $("#btnSaveAll").addEventListener("click", handleSave);
+  $("#btnSaveAllTop").addEventListener("click", handleSave);
 
   // rename key
   $("#btnSaveKeyName").addEventListener("click", async () => {
@@ -2094,66 +2273,6 @@ function renderEdit(key) {
     saveState();
     toast("Deleted key", key);
     location.hash = "#list";
-  });
-
-  // add language
-  $("#btnAddLang").addEventListener("click", async () => {
-    const modalPromise = openModal({
-      title: "Add language",
-      desc: "Adds a language across ALL keys in the project.",
-      bodyHTML: `
-        <label>Language code</label>
-        <input id="mLang" placeholder="e.g. fr, ko, zh-hant" />
-        <div class="hint langHintStable" id="mLangHint" style="margin-top:10px;"></div>
-      `,
-      okText: "Add"
-    });
-
-    // Bind tips after modal renders
-    setTimeout(() => {
-      const inp = $("#mLang");
-      const hint = $("#mLangHint");
-      if (!inp || !hint) return;
-      const update = () => {
-        const v = (inp.value || "").trim();
-        const active = document.activeElement === inp;
-        hint.innerHTML = (active || v) ? renderLangTipsHTML(v) : "";
-      };
-      update();
-      inp.addEventListener("input", update);
-      inp.addEventListener("focus", update);
-      inp.addEventListener("blur", update);
-    }, 0);
-
-    const ok = await modalPromise;
-    if (!ok) return;
-    const lang = normalizeLangCode($("#mLang").value);
-    if (!lang) return toast("Enter a language code.");
-    await addLanguageToProject(p, lang);
-    renderEdit(key);
-  });
-
-  // delete language
-  $("#btnDelLang").addEventListener("click", async () => {
-    if (p.languages.length <= 1) return toast("Project must have at least 1 language.");
-    const options = p.languages.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
-    const ok = await openModal({
-      title: "Delete language",
-      desc: "This deletes the language across ALL keys (cannot be undone).",
-      bodyHTML: `
-        <label>Select language</label>
-        <select id="mDelLang">${options}</select>
-        <div class="hint" style="margin-top:8px;">Tip: export before deleting if you want a backup.</div>
-      `,
-      okText: "Delete",
-      danger: true
-    });
-    if (!ok) return;
-    const lang = normalizeLangCode($("#mDelLang").value);
-    const ok2 = await confirmIfNeeded(`Really delete language "${lang.toUpperCase()}" from all keys?`, true);
-    if (!ok2) return;
-    await deleteLanguageFromProject(p, lang);
-    renderEdit(key);
   });
 
   // AI translate per language
@@ -2303,6 +2422,24 @@ function renderSettings() {
           </div>
         </div>
 
+        <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
+          <div class="row">
+            <div style="flex:1;">
+              <label>Delete language from project</label>
+              <div class="hint">Removes a language from ALL keys in the current project (cannot be undone).</div>
+            </div>
+            <div style="width:200px;">
+              <select id="setDelLang" ${projectLangs.length > 1 ? "" : "disabled"}>
+                ${projectLangs.length > 1
+                  ? projectLangs.map(l => `<option value="${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("")
+                  : `<option value="" selected>Need 2+ languages</option>`
+                }
+              </select>
+            </div>
+            <button class="btn danger" id="btnDelLangSettings" ${projectLangs.length > 1 ? "" : "disabled"}>Delete</button>
+          </div>
+        </div>
+
         <div class="row" style="margin-top:12px;">
           <div></div>
           <button class="btn primary" id="btnSaveSettings">Save settings</button>
@@ -2330,6 +2467,22 @@ function renderSettings() {
     toast("Saved settings");
     renderSettings();
   });
+
+  // Delete language from settings
+  const btnDelLangSettings = $("#btnDelLangSettings");
+  if (btnDelLangSettings) {
+    btnDelLangSettings.addEventListener("click", async () => {
+      const proj = currentProject();
+      if (!proj) return toast("No project selected.");
+      if (proj.languages.length <= 1) return toast("Project must have at least 1 language.");
+      const lang = normalizeLangCode($("#setDelLang")?.value || "");
+      if (!lang) return toast("Select a language.");
+      const ok = await confirmIfNeeded(`Delete language "${lang.toUpperCase()}" from all keys? This cannot be undone.`, true);
+      if (!ok) return;
+      await deleteLanguageFromProject(proj, lang);
+      renderSettings();
+    });
+  }
 }
 
 /* ---------- Confirm helpers ---------- */
