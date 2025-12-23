@@ -255,18 +255,39 @@ function bindImportControls() {
       choices: [
         { label: "CSV (single file)", value: "csv" },
         { label: "Single JSON (nested translation map)", value: "single_json" },
-        { label: "Multiple JSON (one file per language)", value: "multi_json", hint: "Tip: name files like en.json, ja.json, fr-ca.json" }
+        { label: "Multiple JSON (one file per language)", value: "multi_json", hint: "Tip: name files like en.json, ja.json, fr-ca.json" },
+        { label: "Text file (one line = one key)", value: "text", hint: "Each line becomes a translation key" }
       ]
     });
     if (!mode) return;
 
+    // Ask: current project or new project?
+    const currProj = currentProject();
+    let importTarget = "new"; // default to new
+    if (currProj) {
+      const targetChoice = await openChoiceModal({
+        title: "Import destination",
+        desc: "Where do you want to import?",
+        choices: [
+          { label: "Current project", value: "current", hint: currProj.name },
+          { label: "New project", value: "new" }
+        ]
+      });
+      if (!targetChoice) return;
+      importTarget = targetChoice;
+    }
+
     inp.dataset.importMode = mode;
+    inp.dataset.importTarget = importTarget;
     if (mode === "csv") {
       inp.multiple = false;
       inp.accept = ".csv,text/csv";
     } else if (mode === "single_json") {
       inp.multiple = false;
       inp.accept = ".json,application/json";
+    } else if (mode === "text") {
+      inp.multiple = false;
+      inp.accept = ".txt,text/plain";
     } else {
       inp.multiple = true;
       inp.accept = ".json,application/json";
@@ -277,30 +298,42 @@ function bindImportControls() {
   // import handler
   inp.addEventListener("change", async (e) => {
     const mode = e.target.dataset.importMode || "";
+    const importTarget = e.target.dataset.importTarget || "new";
     const files = Array.from((e.target.files || [])).filter(Boolean);
     if (!files.length) return;
 
     const first = files[0];
     const nameNoExt = first.name.replace(/\.[^.]+$/, "");
-    const ok = await openModal({
-      title: "Import",
-      desc: files.length > 1
-        ? `Import ${files.length} files as a new project.`
-        : `Import "${first.name}" as a new project.`,
-      bodyHTML: `
-        <label>Project name (optional)</label>
-        <input id="mImportName" placeholder="${escapeAttr(nameNoExt)}" />
-      `,
-      okText: "Import"
-    });
-    if (!ok) { e.target.value = ""; return; }
-    const projName = ($("#mImportName")?.value || "").trim() || nameNoExt;
+    const currProj = currentProject();
+    const isCurrentProject = importTarget === "current" && currProj;
+
+    // For new project, ask for project name (skip for current project)
+    let projName = isCurrentProject ? currProj.name : nameNoExt;
+    if (!isCurrentProject) {
+      const ok = await openModal({
+        title: "Import",
+        desc: files.length > 1
+          ? `Import ${files.length} files as a new project.`
+          : `Import "${first.name}" as a new project.`,
+        bodyHTML: `
+          <label>Project name (optional)</label>
+          <input id="mImportName" placeholder="${escapeAttr(nameNoExt)}" />
+        `,
+        okText: "Import"
+      });
+      if (!ok) { e.target.value = ""; return; }
+      projName = ($("#mImportName")?.value || "").trim() || nameNoExt;
+    }
 
     try {
       if (mode === "csv") {
         if (files.length !== 1) throw new Error("CSV import supports a single file.");
         const text = await first.text();
-        importCSVToProject(text, projName);
+        if (isCurrentProject) {
+          importCSVToCurrentProject(text, currProj);
+        } else {
+          importCSVToProject(text, projName);
+        }
       } else if (mode === "single_json") {
         if (files.length !== 1) throw new Error("Single JSON import supports a single file.");
         const text = await first.text();
@@ -310,7 +343,11 @@ function bindImportControls() {
         catch { throw new Error("Invalid JSON file."); }
         const isTranslationMap = !!jsonToEntriesAndLangs(data);
         if (isTranslationMap) {
-          importJSONToProject(text, projName, first.name);
+          if (isCurrentProject) {
+            importJSONToCurrentProject(text, currProj, first.name);
+          } else {
+            importJSONToProject(text, projName, first.name);
+          }
         } else {
           const inferred = inferLangFromFileName(first.name) || state.settings.defaultSourceLang || "en";
           const okLang = await openModal({
@@ -326,12 +363,99 @@ function bindImportControls() {
           if (!okLang) throw new Error("Import cancelled.");
           const lang = normalizeLangCode($("#mImportLang")?.value || "");
           if (!lang) throw new Error("Language code is required.");
-          importJSONToProject(text, projName, first.name, lang);
+          if (isCurrentProject) {
+            importJSONToCurrentProject(text, currProj, first.name, lang);
+          } else {
+            importJSONToProject(text, projName, first.name, lang);
+          }
         }
       } else if (mode === "multi_json") {
         const bad = files.find(f => !f.name.toLowerCase().endsWith(".json"));
         if (bad) throw new Error("Multi-file import supports JSON files only.");
-        await importJSONFilesToProject(files, projName);
+        if (isCurrentProject) {
+          await importJSONFilesToCurrentProject(files, currProj);
+        } else {
+          await importJSONFilesToProject(files, projName);
+        }
+      } else if (mode === "text") {
+        if (files.length !== 1) throw new Error("Text import supports a single file.");
+        const text = await first.text();
+        const lines = text.split(/\r?\n/).filter(line => line.trim());
+        if (!lines.length) throw new Error("Text file is empty or has no valid lines.");
+
+        // For current project: show existing languages + enter new
+        // For new project: only enter new
+        const projectLangs = isCurrentProject ? (currProj.languages || []) : [];
+        const defaultLang = state.settings.defaultSourceLang || "en";
+
+        let langSelectHTML = "";
+        let langInputStyle = "";
+        if (isCurrentProject && projectLangs.length) {
+          const langOptionsHTML = `<option value="">(enter new)</option>` +
+            projectLangs.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("");
+          langSelectHTML = `<select id="mTextLangSelect" style="margin-bottom:8px;" onchange="
+            var inp = document.getElementById('mTextLang');
+            var hint = document.getElementById('mTextLangHint');
+            if(this.value) {
+              inp.value = this.value;
+              inp.style.display = 'none';
+              if(hint) hint.style.display = 'none';
+            } else {
+              inp.value = '';
+              inp.style.display = '';
+              if(hint) hint.style.display = '';
+              inp.focus();
+            }
+          ">${langOptionsHTML}</select>`;
+        }
+
+        // Setup hints after a short delay (modal needs to render first)
+        const setupLangHints = () => {
+          const hintEl = $("#mTextLangHint");
+          const langInp = $("#mTextLang");
+          if (hintEl && langInp) {
+            const updateHint = () => {
+              const v = (langInp.value || "").trim();
+              const visible = langInp.style.display !== "none";
+              hintEl.innerHTML = visible ? renderLangTipsHTML(v) : "";
+            };
+            updateHint();
+            langInp.addEventListener("input", updateHint);
+            langInp.addEventListener("focus", updateHint);
+          }
+        };
+        setTimeout(setupLangHints, 50);
+
+        const okLang = await openModal({
+          title: "Text file import",
+          desc: isCurrentProject
+            ? `Found ${lines.length} lines. Import to "${currProj.name}".`
+            : `Found ${lines.length} lines. Specify the language for these translations.`,
+          bodyHTML: `
+            <label>Language code</label>
+            ${langSelectHTML}
+            <input id="mTextLang" placeholder="e.g. en, ja, zh-hans" value="${escapeAttr(defaultLang)}" ${langInputStyle} />
+            <div id="mTextLangHint" class="hint langHintStable" style="margin-top:8px;"></div>
+            <div class="hint" style="margin-top:8px;">Each line will become a key with this language's value.</div>
+            <div style="margin-top:12px;">
+              <label>Key prefix (optional)</label>
+              <input id="mTextKeyPrefix" placeholder="e.g. item, message" value="line" />
+              <div class="hint" style="margin-top:4px;">Keys will be named: prefix_1, prefix_2, etc.</div>
+            </div>
+          `,
+          okText: "Import"
+        });
+
+        if (!okLang) throw new Error("Import cancelled.");
+        const lang = normalizeLangCode($("#mTextLang")?.value || "");
+        if (!lang) throw new Error("Language code is required.");
+        const keyPrefix = ($("#mTextKeyPrefix")?.value || "").trim() || "line";
+
+        if (isCurrentProject) {
+          importTextToCurrentProject(lines, currProj, lang, keyPrefix);
+        } else {
+          importTextToProject(lines, projName, lang, keyPrefix);
+        }
       } else {
         throw new Error("Please choose an import type.");
       }
@@ -346,7 +470,8 @@ function bindImportControls() {
       state.ui.listPage = 0;
       saveState();
 
-      toast("Imported project", `${projName} • ${langs.join(", ") || "(no langs)"} • ${keyCount.toLocaleString()} keys`);
+      const action = isCurrentProject ? "Imported to project" : "Imported project";
+      toast(action, `${projName} • ${langs.join(", ") || "(no langs)"} • ${keyCount.toLocaleString()} keys`);
       render();
     } catch (err) {
       console.error(err);
@@ -354,6 +479,7 @@ function bindImportControls() {
     } finally {
       e.target.value = "";
       delete e.target.dataset.importMode;
+      delete e.target.dataset.importTarget;
     }
   });
 }
@@ -996,6 +1122,153 @@ async function importJSONFilesToProject(files, projectName) {
   };
   state.ui.selectedProjectId = pid;
   state.ui.visibleLangs = [langs[0]];
+  saveState();
+}
+
+function importTextToProject(lines, projectName, lang, keyPrefix = "line") {
+  const entries = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const key = `${keyPrefix}_${i + 1}`;
+    entries[key] = { [lang]: line };
+  }
+
+  if (!Object.keys(entries).length) throw new Error("No valid lines found in text file.");
+
+  const pid = nowId();
+  state.projects[pid] = {
+    id: pid,
+    name: projectName || "Imported Text",
+    languages: [lang],
+    entries,
+    meta: { createdAt: Date.now(), updatedAt: Date.now() }
+  };
+  state.ui.selectedProjectId = pid;
+  state.ui.visibleLangs = [lang];
+  saveState();
+}
+
+// --- Import to CURRENT project functions ---
+
+function importCSVToCurrentProject(csvText, proj) {
+  const rows = parseCSV(csvText);
+  const header = rows[0].map(h => h.trim());
+  if (header.length < 2) throw new Error("CSV header must include: key, <language...>");
+  if (header[0].toLowerCase() !== "key") throw new Error('CSV first column must be named "key".');
+
+  const langs = header.slice(1).map(normalizeLangCode).filter(Boolean);
+  if (!langs.length) throw new Error("CSV must include at least one language column (e.g., en, ja).");
+
+  let addedKeys = 0;
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const key = normalizeKey(row[0] || "");
+    if (!key) continue;
+    if (!proj.entries[key]) {
+      proj.entries[key] = {};
+      addedKeys++;
+    }
+    for (let c = 1; c < header.length; c++) {
+      const lang = langs[c - 1];
+      proj.entries[key][lang] = (row[c] ?? "").toString();
+    }
+  }
+
+  // Add new languages
+  for (const lang of langs) {
+    if (!proj.languages.includes(lang)) proj.languages.push(lang);
+  }
+
+  proj.meta.updatedAt = Date.now();
+  saveState();
+}
+
+function importJSONToCurrentProject(jsonText, proj, fileName = "", forcedLang = "") {
+  let data;
+  try { data = JSON.parse(jsonText); } catch { throw new Error("Invalid JSON."); }
+
+  const parsed = jsonToEntriesAndLangs(data);
+  if (parsed) {
+    // Translation map format
+    for (const key of Object.keys(parsed.entries)) {
+      if (!proj.entries[key]) proj.entries[key] = {};
+      Object.assign(proj.entries[key], parsed.entries[key]);
+    }
+    for (const lang of parsed.langs) {
+      if (!proj.languages.includes(lang)) proj.languages.push(lang);
+    }
+  } else {
+    // Single-language format
+    const lang = forcedLang || inferLangFromFileName(fileName);
+    if (!lang) throw new Error("Cannot determine language. Provide a language code.");
+    const { obj } = maybeUnwrapRootWrapper(data);
+    const flatVals = flattenNestedValuesForLang(obj, lang);
+    for (const k of Object.keys(flatVals)) {
+      const key = normalizeKey(k);
+      if (!key || shouldSkipImportedKey(key)) continue;
+      if (!proj.entries[key]) proj.entries[key] = {};
+      proj.entries[key][lang] = (flatVals[k] ?? "").toString();
+    }
+    if (!proj.languages.includes(lang)) proj.languages.push(lang);
+  }
+
+  proj.meta.updatedAt = Date.now();
+  saveState();
+}
+
+async function importJSONFilesToCurrentProject(files, proj) {
+  for (const file of files) {
+    const text = await file.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(`Invalid JSON: ${file.name}`); }
+    const { obj, inferredLang } = maybeUnwrapRootWrapper(data);
+    let lang = inferLangFromFileName(file.name) || inferredLang;
+
+    // Check if translation-map format
+    const parsed = jsonToEntriesAndLangs(data);
+    if (parsed) {
+      for (const key of Object.keys(parsed.entries)) {
+        if (!proj.entries[key]) proj.entries[key] = {};
+        Object.assign(proj.entries[key], parsed.entries[key]);
+      }
+      for (const l of parsed.langs) {
+        if (!proj.languages.includes(l)) proj.languages.push(l);
+      }
+      continue;
+    }
+
+    if (!lang) throw new Error(`Cannot infer language from filename: ${file.name}. Name files like "en.json", "ja.json".`);
+
+    const flatVals = flattenNestedValuesForLang(obj, lang);
+    for (const k of Object.keys(flatVals)) {
+      const key = normalizeKey(k);
+      if (!key || shouldSkipImportedKey(key)) continue;
+      if (!proj.entries[key]) proj.entries[key] = {};
+      proj.entries[key][lang] = (flatVals[k] ?? "").toString();
+    }
+    if (!proj.languages.includes(lang)) proj.languages.push(lang);
+  }
+
+  proj.meta.updatedAt = Date.now();
+  saveState();
+}
+
+function importTextToCurrentProject(lines, proj, lang, keyPrefix = "line") {
+  let addedKeys = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const key = `${keyPrefix}_${i + 1}`;
+    if (!proj.entries[key]) {
+      proj.entries[key] = {};
+      addedKeys++;
+    }
+    proj.entries[key][lang] = line;
+  }
+
+  if (!proj.languages.includes(lang)) proj.languages.push(lang);
+  proj.meta.updatedAt = Date.now();
   saveState();
 }
 
@@ -2809,6 +3082,28 @@ function renderSettings() {
         <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
           <div class="row">
             <div style="flex:1;">
+              <label>Rename language</label>
+              <div class="hint">Rename a language code and update all translations.</div>
+            </div>
+            <div style="width:140px;">
+              <select id="setRenameLangFrom" ${projectLangs.length ? "" : "disabled"}>
+                ${projectLangs.length
+                  ? projectLangs.map(l => `<option value="${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("")
+                  : `<option value="" selected>No languages</option>`
+                }
+              </select>
+            </div>
+            <div style="width:20px; text-align:center; color:var(--muted);">→</div>
+            <div style="width:140px;">
+              <input id="setRenameLangTo" placeholder="e.g. en-us" ${projectLangs.length ? "" : "disabled"} />
+            </div>
+            <button class="btn" id="btnRenameLang" ${projectLangs.length ? "" : "disabled"}>Rename</button>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div class="row">
+            <div style="flex:1;">
               <label>Delete language from project</label>
               <div class="hint">Removes a language from ALL keys in the current project (cannot be undone).</div>
             </div>
@@ -2851,6 +3146,54 @@ function renderSettings() {
     toast("Saved settings");
     renderSettings();
   });
+
+  // Rename language
+  const btnRenameLang = $("#btnRenameLang");
+  if (btnRenameLang) {
+    btnRenameLang.addEventListener("click", async () => {
+      const proj = currentProject();
+      if (!proj) return toast("No project selected.");
+      const fromLang = normalizeLangCode($("#setRenameLangFrom")?.value || "");
+      const toLang = normalizeLangCode($("#setRenameLangTo")?.value || "");
+      if (!fromLang) return toast("Select a language to rename.");
+      if (!toLang) return toast("Enter a new language code.");
+      if (fromLang === toLang) return toast("New code is same as current.");
+      if (proj.languages.includes(toLang)) return toast(`Language "${toLang.toUpperCase()}" already exists.`);
+
+      const keyCount = Object.keys(proj.entries).length;
+      const ok = await confirmIfNeeded(
+        `Rename "${fromLang.toUpperCase()}" to "${toLang.toUpperCase()}"? This will update ${keyCount} key(s).`,
+        false
+      );
+      if (!ok) return;
+
+      // Update all entries
+      for (const key of Object.keys(proj.entries)) {
+        if (proj.entries[key][fromLang] !== undefined) {
+          proj.entries[key][toLang] = proj.entries[key][fromLang];
+          delete proj.entries[key][fromLang];
+        }
+      }
+
+      // Update languages array
+      const idx = proj.languages.indexOf(fromLang);
+      if (idx !== -1) proj.languages[idx] = toLang;
+
+      // Update visible langs if needed
+      const visIdx = state.ui.visibleLangs.indexOf(fromLang);
+      if (visIdx !== -1) state.ui.visibleLangs[visIdx] = toLang;
+
+      // Update default source lang if needed
+      if (state.settings.defaultSourceLang === fromLang) {
+        state.settings.defaultSourceLang = toLang;
+      }
+
+      proj.meta.updatedAt = Date.now();
+      saveState();
+      toast("Language renamed", `${fromLang.toUpperCase()} → ${toLang.toUpperCase()}`);
+      renderSettings();
+    });
+  }
 
   // Delete language from settings
   const btnDelLangSettings = $("#btnDelLangSettings");
