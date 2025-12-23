@@ -3082,6 +3082,19 @@ function renderSettings() {
         <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
           <div class="row">
             <div style="flex:1;">
+              <label>Rename project</label>
+              <div class="hint">Change the name of the current project.</div>
+            </div>
+            <div style="width:300px;">
+              <input id="setProjectName" value="${p ? escapeAttr(p.name) : ""}" placeholder="Project name" ${p ? "" : "disabled"} />
+            </div>
+            <button class="btn" id="btnRenameProjectSettings" ${p ? "" : "disabled"}>Rename</button>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div class="row">
+            <div style="flex:1;">
               <label>Rename language</label>
               <div class="hint">Rename a language code and update all translations.</div>
             </div>
@@ -3146,6 +3159,32 @@ function renderSettings() {
     toast("Saved settings");
     renderSettings();
   });
+
+  // Rename project
+  const btnRenameProjectSettings = $("#btnRenameProjectSettings");
+  if (btnRenameProjectSettings) {
+    btnRenameProjectSettings.addEventListener("click", async () => {
+      const proj = currentProject();
+      if (!proj) return toast("No project selected.");
+      const newName = ($("#setProjectName")?.value || "").trim();
+      if (!newName) return toast("Project name cannot be empty.");
+      if (newName === proj.name) return toast("Name is unchanged.");
+
+      const ok = await openModal({
+        title: "Rename project",
+        desc: `Rename project from "${proj.name}" to "${newName}"?`,
+        bodyHTML: "",
+        okText: "Rename"
+      });
+      if (!ok) return;
+
+      proj.name = newName;
+      proj.meta.updatedAt = Date.now();
+      saveState();
+      toast("Project renamed", newName);
+      renderSettings();
+    });
+  }
 
   // Rename language
   const btnRenameLang = $("#btnRenameLang");
