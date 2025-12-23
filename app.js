@@ -16,6 +16,7 @@ const DEFAULT_STATE = () => ({
     defaultMaxChars: 0,
     defaultSourceLang: "en",
     confirmDeletes: true,
+    aiContext: "", // Optional context for AI translations (e.g., tone, style, domain)
   },
   ui: {
     selectedProjectId: null,
@@ -2660,6 +2661,7 @@ function renderList() {
           sourceLang: src,
           targetLang: tgt,
           maxChars,
+          extraContext: state.settings.aiContext || "",
           key: k
         });
         proj.entries[k][tgt] = out;
@@ -2943,7 +2945,8 @@ function renderEdit(key) {
         sourceText: srcText,
         sourceLang: src,
         targetLang: tgt,
-        maxChars
+        maxChars,
+        extraContext: state.settings.aiContext || ""
       });
       entry[tgt] = out;
       p.meta.updatedAt = Date.now();
@@ -3077,6 +3080,12 @@ function renderSettings() {
             <label>Default max characters (0 = infinite)</label>
             <input id="setMaxChars" type="number" min="0" value="${Number(s.defaultMaxChars || 0)}" />
           </div>
+
+          <div style="margin-top:10px;">
+            <label>AI Context (optional)</label>
+            <div class="hint">Customize the tone and style of AI translations. Examples: "Use professional/formal tone", "This is for a fantasy RPG game", "Translate as if you are a pirate character", "Use casual language for a mobile app".</div>
+            <textarea id="setAiContext" rows="3" placeholder="e.g., Use a formal business tone for corporate communications...">${escapeHtml(s.aiContext || "")}</textarea>
+          </div>
         </div>
 
         <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
@@ -3154,6 +3163,7 @@ function renderSettings() {
       state.settings.defaultSourceLang = picked;
     }
     state.settings.defaultMaxChars = Math.max(0, Number($("#setMaxChars").value || 0));
+    state.settings.aiContext = ($("#setAiContext").value || "").trim();
     saveState();
     setTheme();
     toast("Saved settings");
