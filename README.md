@@ -30,7 +30,7 @@ and is designed to be hosted on **GitHub Pages** or any static file host.
 - Clean, modern UI
 
 ### 📥 Import
-- CSV or JSON OR TXT
+- CSV, JSON or TXT
 - Automatic validation
 - Prompted project naming
 - Uses filename if name is empty
@@ -125,6 +125,9 @@ lp.bye,Good Bye,さようなら
   }
 }
 ```
+
+### txt/text
+- words or sentences seperated by newline
 
 ## 🚀 Getting Started
 
