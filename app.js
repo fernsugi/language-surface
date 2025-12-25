@@ -11,8 +11,11 @@ const DEFAULT_STATE = () => ({
   settings: {
     theme: "dark",
     cellDisplay: "clip", // clip | wrap
+    aiProvider: "openai", // openai | zai
     openaiApiKey: "",
     openaiModel: "gpt-4o-mini",
+    zaiApiKey: "",
+    zaiModel: "glm-4.5",
     defaultMaxChars: 0,
     defaultSourceLang: "en",
     confirmDeletes: true,
@@ -1401,6 +1404,94 @@ ${sourceText}`;
   return outText;
 }
 
+/* ---------- Z.ai GLM translate (Chat Completions API) ---------- */
+async function zaiTranslate({ sourceText, sourceLang, targetLang, maxChars = 0, extraContext = "" }) {
+  const key = (state.settings.zaiApiKey || "").trim();
+  if (!key) throw new Error("Missing Z.ai API key. Add it in Settings.");
+  const model = (state.settings.zaiModel || "glm-4.5").trim();
+
+  const limitLine = maxChars && Number(maxChars) > 0
+    ? `- Output must be <= ${Number(maxChars)} characters.\n`
+    : "";
+
+  // Get translation rules from current project (filtered by language pair)
+  const proj = currentProject();
+  const allRules = (proj && proj.translationRules) ? proj.translationRules : [];
+  // Filter rules that match this source→target language pair (or "all")
+  const rules = allRules.filter(r => {
+    const rSrc = (r.sourceLang || "").toLowerCase();
+    const rTgt = (r.targetLang || "").toLowerCase();
+    const srcMatch = rSrc === "all" || rSrc === normalizeLangCode(sourceLang);
+    const tgtMatch = rTgt === "all" || rTgt === normalizeLangCode(targetLang);
+    return srcMatch && tgtMatch;
+  });
+  let rulesSection = "";
+  if (rules.length > 0) {
+    const ruleLines = rules.map(r => `  "${r.from}" → "${r.to}"${r.from.includes("*") ? " (* = single character wildcard)" : ""}`).join("\n");
+    rulesSection = `- IMPORTANT: You MUST follow these translation rules exactly (glossary/terminology). Match words CASE-INSENSITIVELY (e.g. "hello", "Hello", "HELLO" all match). Preserve the original casing style in output when possible:
+${ruleLines}
+`;
+  }
+
+  const systemPrompt = `You are a professional localization translator.
+Translate the text from ${sourceLang.toUpperCase()} to ${targetLang.toUpperCase()}.
+
+CRITICAL RULES:
+- Output MUST be 100% in ${targetLang.toUpperCase()} script/characters ONLY.
+- Do NOT include ANY ${sourceLang.toUpperCase()} characters (hiragana, katakana, kanji, hangul, etc.) in output.
+- Translate EVERYTHING including common words, terms, and phrases.
+- TRANSLITERATE all names (people, places, characters) to ${targetLang.toUpperCase()} script. For example: Japanese katakana names like "イル・ミナ" must become Chinese characters like "伊尔·米娜", Korean names must be written in target script, etc.
+- Keep placeholders intact (e.g. {name}, %s, %d, {{var}}, ${'${var}'}, alphanumeric codes like "Rep.F").
+- Keep punctuation style appropriate for ${targetLang.toUpperCase()} and preserve line breaks (\\n).
+${limitLine}${rulesSection}${extraContext ? "- Extra context: " + extraContext + "\n" : ""}
+Return ONLY the translated text. No quotes, no explanations, no original text.`;
+
+  // Z.ai uses OpenAI-compatible Chat Completions API
+  // Docs: https://docs.z.ai/guides/overview/quick-start
+  const res = await fetch("https://api.z.ai/api/paas/v4/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + key
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: sourceText }
+      ],
+      temperature: 0.2
+    })
+  });
+
+  if (!res.ok) {
+    let errText = await res.text().catch(() => "");
+    throw new Error(`Z.ai error (${res.status}): ${errText || res.statusText}`);
+  }
+  const data = await res.json();
+
+  // Extract text from Chat Completions API response
+  let outText = "";
+  if (data.choices && data.choices.length > 0) {
+    const choice = data.choices[0];
+    if (choice.message && typeof choice.message.content === "string") {
+      outText = choice.message.content;
+    }
+  }
+  outText = (outText || "").trim();
+  if (!outText) throw new Error("Z.ai returned empty output.");
+  return outText;
+}
+
+/* ---------- AI Translation dispatcher ---------- */
+async function aiTranslate(params) {
+  const provider = (state.settings.aiProvider || "openai").toLowerCase();
+  if (provider === "zai") {
+    return await zaiTranslate(params);
+  }
+  return await openAITranslate(params);
+}
+
 /* ---------- Routing ---------- */
 function route() {
   const h = location.hash.replace(/^#/, "") || "list";
@@ -2597,7 +2688,7 @@ function renderList() {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         if (cancelled) throw new Error("Cancelled by user");
         try {
-          return await openAITranslate(params);
+          return await aiTranslate(params);
         } catch (err) {
           const errMsg = err.message || String(err);
 
@@ -2941,7 +3032,7 @@ function renderEdit(key) {
     btn.disabled = true;
     btn.textContent = "Translating...";
     try {
-      const out = await openAITranslate({
+      const out = await aiTranslate({
         sourceText: srcText,
         sourceLang: src,
         targetLang: tgt,
@@ -3035,16 +3126,23 @@ function renderSettings() {
         </div>
 
         <div style="margin-top:12px;">
-          <div class="row">
-            <div style="flex:1;">
-              <label>OpenAI API key (stored locally)</label>
-              <input id="setKey" type="password" placeholder="sk-..." value="${escapeAttr(s.openaiApiKey || "")}" />
-            </div>
+          <div style="margin-bottom:10px;">
+            <label>AI Provider</label>
+            <select id="setAiProvider">
+              <option value="openai" ${(s.aiProvider || "openai") === "openai" ? "selected" : ""}>OpenAI</option>
+              <option value="zai" ${s.aiProvider === "zai" ? "selected" : ""}>Z.ai (GLM)</option>
+            </select>
           </div>
 
-          <div class="split" style="margin-top:10px;">
-            <div>
-              <label>Model</label>
+          <div id="openaiSettings" style="${(s.aiProvider || "openai") === "openai" ? "" : "display:none;"}">
+            <div class="row">
+              <div style="flex:1;">
+                <label>OpenAI API key (stored locally)</label>
+                <input id="setKey" type="password" placeholder="sk-..." value="${escapeAttr(s.openaiApiKey || "")}" />
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <label>OpenAI Model</label>
               <select id="setModel">
                 <optgroup label="GPT-4o">
                   <option value="gpt-4o" ${s.openaiModel === "gpt-4o" ? "selected" : ""}>gpt-4o (flagship)</option>
@@ -3065,6 +3163,37 @@ function renderSettings() {
                 </optgroup>
               </select>
             </div>
+          </div>
+
+          <div id="zaiSettings" style="${s.aiProvider === "zai" ? "" : "display:none;"}">
+            <div class="row">
+              <div style="flex:1;">
+                <label>Z.ai API key (stored locally)</label>
+                <input id="setZaiKey" type="password" placeholder="Your Z.ai API key..." value="${escapeAttr(s.zaiApiKey || "")}" />
+              </div>
+            </div>
+            <div style="margin-top:10px;">
+              <label>Z.ai GLM Model</label>
+              <select id="setZaiModel">
+                <optgroup label="GLM-4.7">
+                  <option value="glm-4.7" ${s.zaiModel === "glm-4.7" ? "selected" : ""}>glm-4.7 (flagship)</option>
+                </optgroup>
+                <optgroup label="GLM-4.6">
+                  <option value="glm-4.6" ${s.zaiModel === "glm-4.6" ? "selected" : ""}>glm-4.6</option>
+                  <option value="glm-4.6v" ${s.zaiModel === "glm-4.6v" ? "selected" : ""}>glm-4.6v (vision)</option>
+                </optgroup>
+                <optgroup label="GLM-4.5">
+                  <option value="glm-4.5" ${(s.zaiModel === "glm-4.5" || !s.zaiModel) ? "selected" : ""}>glm-4.5</option>
+                  <option value="glm-4.5v" ${s.zaiModel === "glm-4.5v" ? "selected" : ""}>glm-4.5v (vision)</option>
+                </optgroup>
+                <optgroup label="GLM-4">
+                  <option value="glm-4-32b-0414-128k" ${s.zaiModel === "glm-4-32b-0414-128k" ? "selected" : ""}>glm-4-32b-0414-128k</option>
+                </optgroup>
+              </select>
+            </div>
+          </div>
+
+          <div class="split" style="margin-top:10px;">
             <div>
               <label>Default source language</label>
               <select id="setSrcLang" ${projectLangs.length ? "" : "disabled"}>
@@ -3151,12 +3280,29 @@ function renderSettings() {
 
   $("#btnBackToList").addEventListener("click", () => location.hash = "#list");
 
+  // Toggle provider settings visibility
+  $("#setAiProvider").addEventListener("change", (e) => {
+    const provider = e.target.value;
+    const openaiDiv = $("#openaiSettings");
+    const zaiDiv = $("#zaiSettings");
+    if (provider === "zai") {
+      openaiDiv.style.display = "none";
+      zaiDiv.style.display = "";
+    } else {
+      openaiDiv.style.display = "";
+      zaiDiv.style.display = "none";
+    }
+  });
+
   $("#btnSaveSettings").addEventListener("click", () => {
     state.settings.theme = $("#setTheme").value;
     state.settings.confirmDeletes = $("#setConfirm").value === "yes";
     state.settings.cellDisplay = $("#setCellDisplay").value === "wrap" ? "wrap" : "clip";
+    state.settings.aiProvider = $("#setAiProvider").value || "openai";
     state.settings.openaiApiKey = ($("#setKey").value || "").trim();
     state.settings.openaiModel = $("#setModel").value || "gpt-4o-mini";
+    state.settings.zaiApiKey = ($("#setZaiKey").value || "").trim();
+    state.settings.zaiModel = $("#setZaiModel").value || "glm-4.5";
     const picked = normalizeLangCode($("#setSrcLang")?.value || "");
     const langsNow = (currentProject() && Array.isArray(currentProject().languages)) ? currentProject().languages : [];
     if (picked && langsNow.includes(picked)) {
