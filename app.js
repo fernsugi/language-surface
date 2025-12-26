@@ -812,6 +812,21 @@ function looksLikeLangMapKeys(keys) {
     keys.every(k => looksLikeKnownLangBase(k));
 }
 
+function maybeUnwrapRootWrapper(obj) {
+  // If the JSON has a single root key that looks like a language code, unwrap it.
+  // E.g., { "en": { "key": "value" } } -> { obj: { "key": "value" }, inferredLang: "en" }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    return { obj, inferredLang: "" };
+  }
+  const keys = Object.keys(obj);
+  if (keys.length !== 1) return { obj, inferredLang: "" };
+  const k = keys[0];
+  if (!looksLikeLangCode(k) || !looksLikeKnownLangBase(k)) return { obj, inferredLang: "" };
+  const inner = obj[k];
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return { obj, inferredLang: "" };
+  return { obj: inner, inferredLang: normalizeLangCode(k) };
+}
+
 function tryParseJSON(text, fileLabel = "") {
   // Tries strict JSON first, then a lightweight JSONC-style fallback.
   // This helps with translation files that include comments or trailing commas.
@@ -1226,25 +1241,13 @@ async function importJSONFilesToCurrentProject(files, proj) {
     const text = await file.text();
     let data;
     try { data = JSON.parse(text); } catch { throw new Error(`Invalid JSON: ${file.name}`); }
-    const { obj, inferredLang } = maybeUnwrapRootWrapper(data);
-    let lang = inferLangFromFileName(file.name) || inferredLang;
 
-    // Check if translation-map format
-    const parsed = jsonToEntriesAndLangs(data);
-    if (parsed) {
-      for (const key of Object.keys(parsed.entries)) {
-        if (!proj.entries[key]) proj.entries[key] = {};
-        Object.assign(proj.entries[key], parsed.entries[key]);
-      }
-      for (const l of parsed.langs) {
-        if (!proj.languages.includes(l)) proj.languages.push(l);
-      }
-      continue;
-    }
+    // Get language from filename without extension
+    const baseName = (file.name || "").split("/").pop() || "";
+    const lang = normalizeLangCode(baseName.replace(/\.[^.]+$/, "")) || "unknown";
 
-    if (!lang) throw new Error(`Cannot infer language from filename: ${file.name}. Name files like "en.json", "ja.json".`);
-
-    const flatVals = flattenNestedValuesForLang(obj, lang);
+    // Flatten all nested objects to dot notation
+    const flatVals = flattenAllNested(data);
     for (const k of Object.keys(flatVals)) {
       const key = normalizeKey(k);
       if (!key || shouldSkipImportedKey(key)) continue;
@@ -1256,6 +1259,30 @@ async function importJSONFilesToCurrentProject(files, proj) {
 
   proj.meta.updatedAt = Date.now();
   saveState();
+}
+
+function flattenAllNested(obj, prefix = "") {
+  // Flattens all nested objects to dot notation keys with primitive leaf values.
+  // E.g., {a: {b: {c: "data"}}} -> {"a.b.c": "data"}
+  const out = {};
+  function walk(node, path) {
+    if (node === null || node === undefined) return;
+    if (typeof node !== "object") {
+      if (path) out[path] = node;
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) {
+        walk(node[i], path ? `${path}[${i}]` : `[${i}]`);
+      }
+      return;
+    }
+    for (const k of Object.keys(node)) {
+      walk(node[k], path ? `${path}.${k}` : k);
+    }
+  }
+  walk(obj, prefix);
+  return out;
 }
 
 function importTextToCurrentProject(lines, proj, lang, keyPrefix = "") {
@@ -2704,7 +2731,7 @@ function renderList() {
             const waitTime = waitMatch ? (parseInt(waitMatch[1], 10) + 2) * 1000 : (attempt * 15000);
 
             if (attempt < maxRetries) {
-              updateProgress(done, total, `Rate limited. Waiting ${Math.round(waitTime/1000)}s before retry (${attempt}/${maxRetries})...`, params.key || "");
+              updateProgress(done, total, `Rate limited. Waiting ${Math.round(waitTime / 1000)}s before retry (${attempt}/${maxRetries})...`, params.key || "");
               await sleep(waitTime);
               continue;
             }
@@ -3096,6 +3123,7 @@ function renderSettings() {
           <h2>Settings</h2>
         </div>
         <div class="rightTools">
+          <button class="btn primary" id="btnSaveSettingsTop">Save settings</button>
           <button class="btn" id="btnBackToList">Back</button>
         </div>
       </div>
@@ -3239,9 +3267,9 @@ function renderSettings() {
             <div style="width:140px;">
               <select id="setRenameLangFrom" ${projectLangs.length ? "" : "disabled"}>
                 ${projectLangs.length
-                  ? projectLangs.map(l => `<option value="${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("")
-                  : `<option value="" selected>No languages</option>`
-                }
+      ? projectLangs.map(l => `<option value="${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("")
+      : `<option value="" selected>No languages</option>`
+    }
               </select>
             </div>
             <div style="width:20px; text-align:center; color:var(--muted);">→</div>
@@ -3261,9 +3289,9 @@ function renderSettings() {
             <div style="width:200px;">
               <select id="setDelLang" ${projectLangs.length > 1 ? "" : "disabled"}>
                 ${projectLangs.length > 1
-                  ? projectLangs.map(l => `<option value="${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("")
-                  : `<option value="" selected>Need 2+ languages</option>`
-                }
+      ? projectLangs.map(l => `<option value="${escapeAttr(l)}">${escapeHtml(l.toUpperCase())}</option>`).join("")
+      : `<option value="" selected>Need 2+ languages</option>`
+    }
               </select>
             </div>
             <button class="btn danger" id="btnDelLangSettings" ${projectLangs.length > 1 ? "" : "disabled"}>Delete</button>
@@ -3294,7 +3322,7 @@ function renderSettings() {
     }
   });
 
-  $("#btnSaveSettings").addEventListener("click", () => {
+  const handleSaveSettings = () => {
     state.settings.theme = $("#setTheme").value;
     state.settings.confirmDeletes = $("#setConfirm").value === "yes";
     state.settings.cellDisplay = $("#setCellDisplay").value === "wrap" ? "wrap" : "clip";
@@ -3314,7 +3342,9 @@ function renderSettings() {
     setTheme();
     toast("Saved settings");
     renderSettings();
-  });
+  };
+  $("#btnSaveSettings").addEventListener("click", handleSaveSettings);
+  $("#btnSaveSettingsTop").addEventListener("click", handleSaveSettings);
 
   // Rename project
   const btnRenameProjectSettings = $("#btnRenameProjectSettings");
