@@ -848,11 +848,7 @@ function tryParseJSON(text, fileLabel = "") {
 }
 
 function shouldSkipImportedKey(key) {
-  // Skip only root metadata keys from common i18n formats.
-  // Keep nested keys like "common.label" if they ever exist.
-  if (!key) return true;
-  if (key.includes(".")) return false;
-  return key === "label" || key === "alias";
+  return !key;
 }
 
 function flattenNestedLangMaps(obj, prefix = "") {
