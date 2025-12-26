@@ -805,11 +805,12 @@ function looksLikeKnownLangBase(s) {
 
 function looksLikeLangMapKeys(keys) {
   // Prevent false positives in nested i18n files where many short keys exist (e.g. "hp", "ok", "top").
-  // Heuristic: language maps must look like language codes AND have known bases.
+  // Heuristic: all keys must look like language codes, and at least one must be a known base.
+  // This allows non-standard codes like "zhs", "zht", "kr" as long as one known code exists.
   return Array.isArray(keys) &&
     keys.length > 0 &&
     keys.every(k => looksLikeLangCode(k)) &&
-    keys.every(k => looksLikeKnownLangBase(k));
+    keys.some(k => looksLikeKnownLangBase(k));
 }
 
 function maybeUnwrapRootWrapper(obj) {
