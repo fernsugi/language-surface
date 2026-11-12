@@ -80,12 +80,20 @@
       const saved = settings.providers[providerId];
       const path = "ai.providers." + providerId + ".";
 
+      // A provider is ready once it has what it needs to be called.
+      const isReady = (id) => {
+        const cfg = s().ai.providers[id];
+        return id === "custom" ? !!(cfg.baseUrl && cfg.model) : !!cfg.apiKey;
+      };
+      const dots = {};
+      const syncDots = () => {
+        for (const id of Object.keys(dots)) dots[id].hidden = !isReady(id);
+      };
       const cards = h(
         "div.provider-grid",
         { role: "radiogroup", "aria-label": "AI provider" },
         Object.values(ai.PROVIDERS).map((prov) => {
-          const cfg = settings.providers[prov.id];
-          const ready = prov.id === "custom" ? !!(cfg.baseUrl && cfg.model) : !!cfg.apiKey;
+          dots[prov.id] = h("span.dot", { title: "Configured" });
           return h(
             "button.provider-card",
             {
@@ -98,11 +106,12 @@
                 renderAI();
               },
             },
-            h("span.provider-card-name", prov.label, ready ? h("span.dot", { title: "Configured" }) : null),
+            h("span.provider-card-name", prov.label, dots[prov.id]),
             h("span.provider-card-sub", prov.blurb)
           );
         })
       );
+      syncDots();
 
       const keyInput = h("input.input.mono", {
         type: "password",
@@ -113,6 +122,7 @@
         onInput: (e) => {
           store.setSetting(path + "apiKey", e.target.value.trim());
           result.textContent = "";
+          syncDots();
         },
       });
       const reveal = ui.button({
@@ -138,6 +148,7 @@
         onInput: (e) => {
           store.setSetting(path + "model", e.target.value.trim());
           result.textContent = "";
+          syncDots();
         },
       });
       const loadBtn = ui.button({
@@ -201,6 +212,7 @@
               onInput: (e) => {
                 store.setSetting(path + "baseUrl", e.target.value.trim());
                 result.textContent = "";
+                syncDots();
               },
             }),
           })
@@ -213,7 +225,15 @@
           control: h("div.key-row", keyInput, reveal),
           hint: def.keyUrl ? h("span", "Create one at ", h("a", { href: def.keyUrl, target: "_blank", rel: "noopener noreferrer" }, new URL(def.keyUrl).hostname), ".") : "Leave empty if your server does not need one.",
         }),
-        ui.field({ label: "Model", control: h("div.key-row", modelInput, loadBtn, modelList), hint: "Type any model name your account can use." })
+        ui.field({
+          label: "Model",
+          control: h("div.key-row", modelInput, loadBtn, modelList),
+          hint: h(
+            "span",
+            "Type any model name your account can use.",
+            def.modelTip ? [" ", h("span.mono", { style: "white-space:nowrap" }, def.modelTip.model), " " + def.modelTip.text] : null
+          ),
+        })
       );
 
       LS.dom.replaceChildren(

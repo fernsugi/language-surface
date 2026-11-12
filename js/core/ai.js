@@ -20,6 +20,19 @@
       defaultModel: "gpt-4o-mini",
       models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "gpt-5-mini", "gpt-5"],
     },
+    anthropic: {
+      id: "anthropic",
+      label: "Anthropic",
+      blurb: "Claude models",
+      api: "messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      keyPlaceholder: "sk-ant-…",
+      keyUrl: "https://platform.claude.com/settings/keys",
+      defaultModel: "claude-opus-5-5",
+      models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"],
+      // Shown under the model field: a model worth knowing about, and why.
+      modelTip: { model: "claude-haiku-5-5", text: "is the fastest, lowest-cost choice for large runs." },
+    },
     zai: {
       id: "zai",
       label: "Z.ai",
@@ -47,7 +60,7 @@
 
   class AIError extends Error {
     /**
-     * @param {string} kind "config" | "auth" | "rate" | "server" | "network" | "request" | "empty" | "refused" | "aborted"
+     * @param {string} kind "config" | "auth" | "billing" | "rate" | "server" | "network" | "request" | "empty" | "refused" | "aborted"
      */
     constructor(kind, message, extra) {
       super(message);
@@ -59,8 +72,9 @@
     get retryable() {
       return this.kind === "rate" || this.kind === "server" || this.kind === "network" || this.kind === "empty";
     }
+    /** Nothing will work until the person changes something, so a run should stop. */
     get fatal() {
-      return this.kind === "config" || this.kind === "auth" || this.kind === "aborted";
+      return this.kind === "config" || this.kind === "auth" || this.kind === "billing" || this.kind === "aborted";
     }
   }
 
@@ -169,14 +183,20 @@
     return 0;
   }
 
+  // Error codes that mean the account has no credit left. Providers report these as 429s, but
+  // waiting does not help, so they must not be retried like a rate limit.
+  const OUT_OF_CREDIT = new Set(["insufficient_quota", "enforced_spend_limit_reached", "billing_error"]);
+
   async function readError(res, providerLabel) {
     let message = "";
+    let code = "";
     try {
       const raw = await res.text();
       try {
         const data = JSON.parse(raw);
         const err = data && (data.error || data);
         message = typeof err === "string" ? err : (err && (err.message || err.msg)) || "";
+        if (err && typeof err === "object") code = String((err.details && err.details.error_code) || err.code || err.type || "");
       } catch (e) {
         message = raw;
       }
@@ -187,6 +207,7 @@
     const status = res.status;
     const full = providerLabel + " error " + status + ": " + message;
     if (status === 401 || status === 403) return new AIError("auth", full, { status });
+    if (status === 402 || OUT_OF_CREDIT.has(code)) return new AIError("billing", full, { status });
     if (status === 429) return new AIError("rate", full, { status, retryAfter: parseRetryAfter(res, message) });
     if (status >= 500) return new AIError("server", full, { status, retryAfter: parseRetryAfter(res, message) });
     return new AIError("request", full, { status });
@@ -211,9 +232,20 @@
     }
   }
 
+  const ANTHROPIC_VERSION = "2026-10-21";
+  const ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
   function headers(cfg) {
     const h = { "Content-Type": "application/json" };
-    if (cfg.apiKey) h.Authorization = "Bearer " + cfg.apiKey;
+    if (cfg.provider.api === "messages") {
+      h["x-api-key"] = cfg.apiKey;
+      h["anthropic-version"] = ANTHROPIC_VERSION;
+      // Anthropic only answers requests made directly from a web page when the caller sends this
+      // header, as an acknowledgement that the key is held in the browser. That is how this app
+      // works by design: the key is the user's own and never leaves their device except to
+      // authenticate these requests.
+      h["anthropic-dangerous-direct-browser-access"] = "true";
+    } else if (cfg.apiKey) h.Authorization = "Bearer " + cfg.apiKey;
     return h;
   }
 
@@ -261,9 +293,67 @@
     return "";
   }
 
+  /* ---- Anthropic (Claude Messages API) ------------------------------------------------ */
+
+  // Request options that not every Claude model accepts. A 400 that names one of them drops it for
+  // that model (for the rest of the session) and the request is sent again without it.
+  const CLAUDE_OPTIONS = [
+    { id: "fallbacks", named: /fallback/i },
+    { id: "effort", named: /effort|output_config/i },
+  ];
+  const claudeUnsupported = new Set(); // "<model>\u0000<option id>"
+
+  async function sendClaude(cfg, body, signal) {
+    const wants = (id) => !claudeUnsupported.has(cfg.model + "\u0000" + id);
+    for (;;) {
+      const payload = Object.assign({}, body);
+      const h = headers(cfg);
+      // Interface strings are short, simple work: the lowest effort keeps a run fast and cheap.
+      if (wants("effort")) payload.output_config = { effort: "low" };
+      // If a safety classifier declines a string, have the API run it on the fallback model it
+      // recommends instead of failing that string.
+      if (wants("fallbacks")) {
+        payload.fallbacks = "default";
+        h["anthropic-beta"] = ANTHROPIC_FALLBACK_BETA;
+      }
+      try {
+        return await request(cfg.baseUrl + "/messages", { method: "POST", headers: h, body: JSON.stringify(payload) }, cfg.provider.label, signal);
+      } catch (e) {
+        const option = e instanceof AIError && e.status === 400 && CLAUDE_OPTIONS.find((o) => wants(o.id) && o.named.test(e.message));
+        if (!option) throw e;
+        claudeUnsupported.add(cfg.model + "\u0000" + option.id);
+      }
+    }
+  }
+
+  function extractClaudeText(data) {
+    // A decline arrives as a normal 200 response; check for it before reading the content.
+    if (data && data.stop_reason === "refusal") {
+      const why = data.stop_details && typeof data.stop_details.explanation === "string" ? data.stop_details.explanation.trim() : "";
+      throw new AIError("refused", "Claude declined to translate this text" + (why ? ": " + why.slice(0, 200) : "."));
+    }
+    let out = "";
+    const blocks = data && Array.isArray(data.content) ? data.content : [];
+    // Thinking and fallback blocks can come before the answer; only text blocks are the answer.
+    for (const block of blocks) if (block && block.type === "text" && typeof block.text === "string") out += block.text;
+    return out;
+  }
+
+  async function completeClaude(cfg, system, text, signal) {
+    // max_tokens covers the model's thinking as well as the answer, and only tokens actually
+    // produced are billed or rate limited, so a generous ceiling costs nothing.
+    const body = { model: cfg.model, max_tokens: 16000, system, messages: [{ role: "user", content: text }] };
+    const data = await sendClaude(cfg, body, signal);
+    if (data && data.stop_reason === "max_tokens") {
+      throw new AIError("request", "Claude ran out of room before finishing this translation. The text is too long to translate in one request.");
+    }
+    return extractClaudeText(data);
+  }
+
   /** One provider round trip: system prompt + user text -> raw model text. */
   async function complete(cfg, system, text, signal) {
     const label = cfg.provider.label;
+    if (cfg.provider.api === "messages") return completeClaude(cfg, system, text, signal);
     if (cfg.provider.api === "responses") {
       const data = await withTemperatureFallback(cfg, (withTemp) => {
         const body = { model: cfg.model, instructions: system, input: text, store: false };
@@ -398,7 +488,9 @@
     const cfg = resolveConfig(ai);
     if (cfg.provider.id === "custom" && !cfg.baseUrl) throw new AIError("config", "Add the base URL of your endpoint first.");
     if (!cfg.apiKey && !cfg.provider.keyOptional) throw new AIError("config", "Add your " + cfg.provider.label + " API key first.");
-    const data = await request(cfg.baseUrl + "/models", { method: "GET", headers: headers(cfg) }, cfg.provider.label, signal);
+    // Anthropic returns 20 models per page unless asked for more.
+    const query = cfg.provider.api === "messages" ? "?limit=1000" : "";
+    const data = await request(cfg.baseUrl + "/models" + query, { method: "GET", headers: headers(cfg) }, cfg.provider.label, signal);
     const list = Array.isArray(data) ? data : (data && (data.data || data.models)) || [];
     const skip = /embed|whisper|tts|dall-e|moderation|audio|realtime|transcri|image|sora|rerank|speech|guard/i;
     return LS.util

@@ -246,3 +246,209 @@ test("listModels filters non-text models", async () => {
   assert.equal(calls[0].url, "https://api.openai.com/v1/models");
   assert.equal(calls[0].init.method, "GET");
 });
+
+/* ---- Anthropic (Claude) ------------------------------------------------------------------ */
+
+function claudeSettings(model) {
+  const s = settings("anthropic");
+  s.providers.anthropic.apiKey = "sk-ant-test";
+  if (model) s.providers.anthropic.model = model;
+  return s;
+}
+
+const claudeOk = (text, extra) => json(200, Object.assign({ type: "message", role: "assistant", content: [{ type: "text", text }], stop_reason: "end_turn" }, extra || {}));
+const claudeError = (status, type, message, headers) => json(status, { type: "error", error: { type, message }, request_id: "req_test" }, headers);
+
+test("Anthropic is offered as a provider with a current default model", () => {
+  const def = ai.PROVIDERS.anthropic;
+  assert.equal(def.label, "Anthropic");
+  assert.equal(def.defaultModel, "claude-opus-5-5");
+  assert.ok(def.models.includes(def.defaultModel));
+  const fresh = LS.migrate.defaultSettings().ai;
+  assert.deepEqual(fresh.providers.anthropic, { apiKey: "", model: "claude-opus-5-5" });
+  fresh.provider = "anthropic";
+  assert.match(ai.configProblem(fresh), /Anthropic API key/);
+  // Settings saved before the provider existed gain it on load, and keep everything else.
+  const older = LS.migrate.normalizeSettings({ ai: { provider: "zai", providers: { openai: { apiKey: "sk-old", model: "gpt-4o" }, zai: { apiKey: "zk-old", model: "glm-4.6" } } } });
+  assert.equal(older.ai.provider, "zai");
+  assert.equal(older.ai.providers.openai.apiKey, "sk-old");
+  assert.equal(older.ai.providers.zai.model, "glm-4.6");
+  assert.deepEqual(older.ai.providers.anthropic, { apiKey: "", model: "claude-opus-5-5" });
+  const chosen = LS.migrate.normalizeSettings({ ai: { provider: "anthropic", providers: { anthropic: { apiKey: "sk-ant-x", model: "claude-haiku-5-5" } } } });
+  assert.equal(chosen.ai.provider, "anthropic");
+  assert.deepEqual(chosen.ai.providers.anthropic, { apiKey: "sk-ant-x", model: "claude-haiku-5-5" });
+});
+
+test("translate: Claude Messages request shape", async () => {
+  const calls = mockFetch([claudeOk(" Épée rouillée ")]);
+  const out = await ai.translate({
+    ai: claudeSettings(),
+    text: "  Rusty sword ",
+    sourceLang: "en",
+    targetLang: "fr",
+    glossary: [{ sourceLang: "en", targetLang: "fr", from: "sword", to: "épée" }],
+    context: "Game",
+  });
+  assert.deepEqual(out, { text: "Épée rouillée", overLimit: false });
+  assert.equal(calls.length, 1);
+  const { url, init, body } = calls[0];
+  assert.equal(url, "https://api.anthropic.com/v1/messages");
+  assert.equal(init.method, "POST");
+  assert.equal(init.headers["x-api-key"], "sk-ant-test");
+  assert.equal(init.headers["anthropic-version"], "2026-10-21");
+  assert.equal(init.headers["anthropic-dangerous-direct-browser-access"], "true", "required for requests made from a web page");
+  assert.equal(init.headers["anthropic-beta"], "server-side-fallback-2026-07-01");
+  assert.equal(init.headers.Authorization, undefined, "the key is not also sent as a bearer token");
+  assert.equal(init.headers["Content-Type"], "application/json");
+  assert.equal(body.model, "claude-opus-5-5");
+  assert.equal(body.max_tokens, 16000);
+  assert.deepEqual(body.messages, [{ role: "user", content: "Rusty sword" }]);
+  assert.match(body.system, /professional localization translator/);
+  assert.match(body.system, /"sword" → "épée"/);
+  assert.match(body.system, /Context and style: Game/);
+  assert.deepEqual(body.output_config, { effort: "low" });
+  assert.equal(body.fallbacks, "default");
+  // This API version rejects sampling parameters on every model, and thinking is left to the model.
+  for (const field of ["temperature", "top_p", "top_k", "thinking", "stream"]) assert.equal(field in body, false, field + " must not be sent");
+});
+
+test("translate: Claude answers are read from text blocks only", async () => {
+  mockFetch([
+    json(200, {
+      content: [
+        { type: "thinking", thinking: "", signature: "sig" },
+        { type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" } },
+        { type: "text", text: "Bon" },
+        { type: "text", text: "jour" },
+      ],
+      stop_reason: "end_turn",
+    }),
+  ]);
+  const out = await ai.translate({ ai: claudeSettings(), text: "Hello", sourceLang: "en", targetLang: "fr" });
+  assert.equal(out.text, "Bonjour");
+});
+
+test("translate: a Claude refusal or a cut-off answer is reported, not saved", async () => {
+  const run = () => ai.translate({ ai: claudeSettings(), text: "Hello", sourceLang: "en", targetLang: "fr" });
+
+  mockFetch([json(200, { content: [], stop_reason: "refusal", stop_details: { category: "cyber", explanation: "This request was declined." } })]);
+  await assert.rejects(run, (e) => e.kind === "refused" && !e.retryable && !e.fatal && /declined to translate this text: This request was declined\./.test(e.message));
+
+  // Text that arrived before a refusal is not a translation.
+  mockFetch([json(200, { content: [{ type: "text", text: "Bonj" }], stop_reason: "refusal" })]);
+  await assert.rejects(run, (e) => e.kind === "refused" && /declined to translate this text\.$/.test(e.message));
+
+  mockFetch([json(200, { content: [{ type: "text", text: "Bonjour, ceci est" }], stop_reason: "max_tokens" })]);
+  await assert.rejects(run, (e) => e.kind === "request" && /ran out of room/.test(e.message));
+
+  mockFetch([claudeOk("   ")]);
+  await assert.rejects(run, (e) => e.kind === "empty" && /Anthropic returned an empty translation/.test(e.message));
+});
+
+test("translate: options a Claude model does not accept are dropped and remembered", async () => {
+  const s = claudeSettings("claude-test-no-options");
+  const run = (text) => ai.translate({ ai: s, text, sourceLang: "en", targetLang: "fr" });
+  let calls = mockFetch([
+    claudeError(400, "invalid_request_error", "fallbacks: this model does not support server-side fallbacks"),
+    claudeError(400, "invalid_request_error", "output_config.effort is not supported for this model"),
+    claudeOk("Bonjour"),
+  ]);
+  assert.equal((await run("Hello")).text, "Bonjour");
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].body.fallbacks, "default");
+  assert.equal(calls[1].body.fallbacks, undefined);
+  assert.equal(calls[1].init.headers["anthropic-beta"], undefined, "the beta header goes with the option");
+  assert.deepEqual(calls[1].body.output_config, { effort: "low" });
+  assert.equal(calls[2].body.output_config, undefined);
+  assert.equal(calls[2].body.fallbacks, undefined);
+
+  // Remembered for the rest of the session, for that model only.
+  calls = mockFetch([claudeOk("Salut")]);
+  await run("Hi");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.output_config, undefined);
+  assert.equal(calls[0].body.fallbacks, undefined);
+  calls = mockFetch([claudeOk("Salut")]);
+  await ai.translate({ ai: claudeSettings("claude-test-other"), text: "Hi", sourceLang: "en", targetLang: "fr" });
+  assert.deepEqual(calls[0].body.output_config, { effort: "low" });
+  assert.equal(calls[0].body.fallbacks, "default");
+
+  // A beta header the organisation cannot use is handled the same way.
+  calls = mockFetch([claudeError(400, "invalid_request_error", "Unexpected value(s) `server-side-fallback-2026-07-01` for the `anthropic-beta` header."), claudeOk("Bonjour")]);
+  assert.equal((await ai.translate({ ai: claudeSettings("claude-test-no-beta"), text: "Hello", sourceLang: "en", targetLang: "fr" })).text, "Bonjour");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].init.headers["anthropic-beta"], undefined);
+  assert.deepEqual(calls[1].body.output_config, { effort: "low" });
+
+  // Any other 400 is a real error and is not retried.
+  calls = mockFetch([claudeError(400, "invalid_request_error", "messages: at least one message is required")]);
+  await assert.rejects(() => ai.translate({ ai: claudeSettings("claude-test-bad"), text: "Hello", sourceLang: "en", targetLang: "fr" }), (e) => e.kind === "request" && e.status === 400);
+  assert.equal(calls.length, 1);
+});
+
+test("translate: Claude API errors are classified", async () => {
+  const run = () => ai.translate({ ai: claudeSettings(), text: "Hello", sourceLang: "en", targetLang: "fr" });
+
+  mockFetch([claudeError(401, "authentication_error", "invalid x-api-key")]);
+  await assert.rejects(run, (e) => e.kind === "auth" && e.fatal && e.message === "Anthropic error 401: invalid x-api-key");
+
+  mockFetch([claudeError(403, "permission_error", "Not allowed")]);
+  await assert.rejects(run, (e) => e.kind === "auth" && e.fatal);
+
+  mockFetch([claudeError(404, "not_found_error", "model: claude-nope")]);
+  await assert.rejects(run, (e) => e.kind === "request" && !e.retryable && /model: claude-nope/.test(e.message));
+
+  mockFetch([claudeError(429, "rate_limit_error", "Too many requests", { "retry-after": "4" })]);
+  await assert.rejects(run, (e) => e.kind === "rate" && e.retryable && e.retryAfter === 4);
+
+  mockFetch([claudeError(529, "overloaded_error", "Overloaded")]);
+  await assert.rejects(run, (e) => e.kind === "server" && e.retryable && e.status === 529);
+
+  mockFetch([claudeError(500, "api_error", "Internal error")]);
+  await assert.rejects(run, (e) => e.kind === "server" && e.retryable);
+});
+
+test("running out of credit stops a run instead of being retried like a rate limit", async () => {
+  const claude = () => ai.translate({ ai: claudeSettings(), text: "Hello", sourceLang: "en", targetLang: "fr" });
+  mockFetch([claudeError(402, "billing_error", "Your credit balance is too low")]);
+  await assert.rejects(claude, (e) => e.kind === "billing" && e.fatal && !e.retryable);
+
+  mockFetch([json(429, { type: "error", error: { type: "rate_limit_error", message: "Monthly spend limit reached", details: { error_code: "enforced_spend_limit_reached" } } })]);
+  await assert.rejects(claude, (e) => e.kind === "billing" && e.fatal && !e.retryable);
+
+  mockFetch([json(429, { error: { message: "You exceeded your current quota", type: "insufficient_quota", code: "insufficient_quota" } })]);
+  await assert.rejects(() => ai.translate({ ai: settings("openai"), text: "Hello", sourceLang: "en", targetLang: "fr" }), (e) => e.kind === "billing" && e.fatal);
+
+  // An ordinary rate limit is still retried.
+  let n = 0;
+  mockFetch([() => (++n < 2 ? claudeError(429, "rate_limit_error", "Slow down", { "retry-after": "0" }) : claudeOk("Bonjour"))]);
+  const out = await ai.withRetry(claude, { retries: 2 });
+  assert.equal(out.text, "Bonjour");
+  assert.equal(n, 2);
+});
+
+test("listModels asks Anthropic for the whole list", async () => {
+  const calls = mockFetch([
+    json(200, {
+      data: [
+        { type: "model", id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
+        { type: "model", id: "claude-haiku-5-5", display_name: "Claude Haiku 5.5" },
+        { type: "model", id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
+      ],
+      has_more: false,
+      first_id: "claude-opus-5-5",
+      last_id: "claude-opus-5-5",
+    }),
+  ]);
+  const models = await ai.listModels(claudeSettings());
+  assert.deepEqual(models, ["claude-haiku-5-5", "claude-opus-5-5"]);
+  assert.equal(calls[0].url, "https://api.anthropic.com/v1/models?limit=1000");
+  assert.equal(calls[0].init.method, "GET");
+  assert.equal(calls[0].init.headers["x-api-key"], "sk-ant-test");
+  assert.equal(calls[0].init.headers["anthropic-version"], "2026-10-21");
+  assert.equal(calls[0].init.headers["anthropic-dangerous-direct-browser-access"], "true");
+
+  const none = LS.migrate.defaultSettings().ai;
+  none.provider = "anthropic";
+  await assert.rejects(() => ai.listModels(none), (e) => e.kind === "config" && /Anthropic API key/.test(e.message));
+});

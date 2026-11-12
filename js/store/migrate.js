@@ -14,6 +14,7 @@
         provider: "openai",
         providers: {
           openai: { apiKey: "", model: "gpt-4o-mini" },
+          anthropic: { apiKey: "", model: "claude-opus-5-5" },
           zai: { apiKey: "", model: "glm-4.5" },
           custom: { apiKey: "", model: "", baseUrl: "" },
         },

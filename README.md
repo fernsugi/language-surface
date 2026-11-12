@@ -58,8 +58,8 @@ A live preview shows exactly what you will get. Arrays in imported JSON are
 rebuilt on export, so files round-trip.
 
 ### AI translation (optional)
-- Bring your own key: **OpenAI**, **Z.ai (GLM)**, or any **OpenAI-compatible endpoint**
-  (including local models such as Ollama or LM Studio)
+- Bring your own key: **OpenAI**, **Anthropic (Claude)**, **Z.ai (GLM)**, or any
+  **OpenAI-compatible endpoint** (including local models such as Ollama or LM Studio)
 - Translate one cell, one key, a selection, the current view or the whole project
 - Fills only empty cells unless you ask to retranslate
 - Runs several requests in parallel, backs off on rate limits, can be stopped at any time
@@ -67,6 +67,12 @@ rebuilt on export, so files round-trip.
 - **Glossary**: fixed term translations per language pair (`*` matches one character)
 - **Instructions**: describe your product and tone once per project
 - Optional maximum length per translation; placeholders are preserved
+
+With Anthropic, requests use low effort (interface strings are short, simple
+work) and opt in to the API's server-side fallback, so a string that a safety
+classifier declines is retried on the fallback model Anthropic recommends
+instead of failing. Models that do not accept either option are detected and
+called without it.
 
 ---
 
@@ -175,7 +181,7 @@ node --test
 - HTML, CSS and vanilla JavaScript — no framework, no bundler
 - IndexedDB for storage
 - [Geist](https://vercel.com/font) typeface and [Lucide](https://lucide.dev) icons, bundled locally
-- OpenAI Responses API and OpenAI-compatible chat completions (optional)
+- OpenAI Responses API, Anthropic Messages API and OpenAI-compatible chat completions (optional)
 
 ## License
 

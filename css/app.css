@@ -1644,7 +1644,8 @@
 /* ---- Settings view ------------------------------------------------------------------------------ */
 .provider-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Four providers in a row when there is room, two by two otherwise. */
+  grid-template-columns: repeat(auto-fit, minmax(max(132px, 22%), 1fr));
   gap: 8px;
 }
 .provider-card {
@@ -2564,7 +2565,6 @@
   .term-head {
     display: none;
   }
-  .provider-grid,
   .option-cards,
   .welcome-actions,
   .welcome-points {
