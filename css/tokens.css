@@ -1,0 +1,165 @@
+/* ==========================================================================
+   Language Surface — design tokens
+   Colors were generated in OKLCH and checked for WCAG contrast, then frozen
+   as sRGB hex so every browser renders the same values.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Typography ---- */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+
+  /* ---- Shape ---- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-full: 999px;
+
+  /* ---- Motion ---- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+
+  /* ---- Layout ---- */
+  --sidebar-w: 256px;
+  --inspector-w: 408px;
+  --topbar-h: 52px;
+  --control-h: 32px;
+
+  /* ---- Color: light ---- */
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f4f6f8;
+  --surface-3: #eaedf0;
+  --elevated: #ffffff;
+
+  --border: #e0e3e6;
+  --border-subtle: #eceef1;
+  --border-strong: #caced2;
+
+  --text: #14191e;
+  --text-2: #4d5359;
+  --text-3: #6e747a;
+  --text-on-accent: #ffffff;
+
+  --ink: #14191e;
+  --ink-hover: #2b3138;
+  --ink-text: #f9fafb;
+
+  --accent: #008694;
+  --accent-hover: #007581;
+  --accent-text: #006973;
+  --accent-soft: #e3f8fa;
+  --accent-soft-2: #bdedf3;
+  --accent-ring: rgba(0, 134, 148, 0.24);
+
+  --danger: #d02b31;
+  --danger-hover: #b9232a;
+  --danger-text: #b71824;
+  --danger-soft: #ffefed;
+  --danger-ring: rgba(208, 43, 49, 0.2);
+
+  --warning: #e8a127;
+  --warning-text: #8f5300;
+  --warning-soft: #fff2d6;
+
+  --success: #259f56;
+  --success-text: #036a34;
+  --success-soft: #e5faea;
+
+  --scrim: rgba(15, 20, 26, 0.42);
+  --mark: #c5f0f5;
+  --hatch: rgba(232, 161, 39, 0.11);
+
+  --toast-bg: #171c21;
+  --toast-text: #f4f6f8;
+  --toast-muted: #a2a9af;
+  --toast-accent: #65d9dd;
+
+  --shadow-xs: 0 1px 2px rgba(16, 24, 32, 0.05);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 32, 0.06), 0 1px 3px rgba(16, 24, 32, 0.04);
+  --shadow-md: 0 4px 12px -2px rgba(16, 24, 32, 0.08), 0 2px 4px -2px rgba(16, 24, 32, 0.05);
+  --shadow-lg: 0 12px 32px -8px rgba(16, 24, 32, 0.16), 0 4px 10px -4px rgba(16, 24, 32, 0.08);
+  --shadow-xl: 0 24px 64px -16px rgba(16, 24, 32, 0.28), 0 8px 20px -8px rgba(16, 24, 32, 0.12);
+  --shadow-edge: 6px 0 12px -8px rgba(16, 24, 32, 0.18);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234d5359' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b0e10;
+  --surface: #121518;
+  --surface-2: #191c1f;
+  --surface-3: #212529;
+  --elevated: #181b1f;
+
+  --border: #24282c;
+  --border-subtle: #1c2024;
+  --border-strong: #383e43;
+
+  --text: #eef0f3;
+  --text-2: #a2a9af;
+  --text-3: #7a8187;
+  --text-on-accent: #0f1215;
+
+  --ink: #eef0f3;
+  --ink-hover: #ffffff;
+  --ink-text: #0f1215;
+
+  --accent: #45ced2;
+  --accent-hover: #65d9dd;
+  --accent-text: #65d9dd;
+  --accent-soft: #0e2b2f;
+  --accent-soft-2: #0b3d42;
+  --accent-ring: rgba(69, 206, 210, 0.28);
+
+  --danger: #f3625f;
+  --danger-hover: #fb817c;
+  --danger-text: #fb817c;
+  --danger-soft: #3b1c1a;
+  --danger-ring: rgba(243, 98, 95, 0.28);
+
+  --warning: #edb345;
+  --warning-text: #f1bf5b;
+  --warning-soft: #34260c;
+
+  --success: #54c57a;
+  --success-text: #71d790;
+  --success-soft: #142d1b;
+
+  --scrim: rgba(2, 4, 6, 0.62);
+  --mark: #0f4a50;
+  --hatch: rgba(237, 179, 69, 0.07);
+
+  --toast-bg: #262b30;
+  --toast-text: #eef0f3;
+  --toast-muted: #a2a9af;
+  --toast-accent: #65d9dd;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36), 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.44), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 12px 32px -8px rgba(0, 0, 0, 0.6), 0 4px 10px -4px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 24px 64px -16px rgba(0, 0, 0, 0.72), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
+  --shadow-edge: 6px 0 12px -8px rgba(0, 0, 0, 0.7);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a2a9af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
