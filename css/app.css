@@ -572,15 +572,16 @@
   .toolbar .tb-inspector {
     display: none;
   }
-  /* Row actions live in the details panel on small screens; the key needs the room. */
-  .row-actions {
+  /* Row actions live in the details panel on small screens; the key needs the room.
+     (Scoped under .grid so these win over the base rules further down.) */
+  .grid .row-actions {
     display: none;
   }
-  .gc-key {
+  .grid .gc-key {
     gap: 6px;
     padding-left: 10px;
   }
-  .gh-key {
+  .grid .gh-key {
     padding-left: 10px;
   }
 }
