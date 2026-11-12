@@ -150,7 +150,16 @@
     /* ---- Top bar ---------------------------------------------------------------------- */
 
     const p0 = store.project();
-    const titleInput = h("input.title-edit", { type: "text", value: p0.name, spellcheck: false, autocomplete: "off", "aria-label": "Project name", "data-tip": "Rename project", size: 1 });
+    const titleInput = h("input.title-edit", { type: "text", value: p0.name, spellcheck: false, autocomplete: "off", "aria-label": "Project name", "data-tip": "Rename project" });
+    // Size the field to its text (measured, so it works in every browser and for any script).
+    let measure = null;
+    const fitTitle = () => {
+      if (!titleInput.isConnected) return;
+      const cs = getComputedStyle(titleInput);
+      measure = measure || document.createElement("canvas").getContext("2d");
+      measure.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
+      titleInput.style.width = Math.ceil(measure.measureText(titleInput.value || " ").width) + 18 + "px";
+    };
     const commitTitle = () => {
       const p = store.project();
       if (!p) return;
@@ -158,8 +167,10 @@
       if (!next) titleInput.value = p.name;
       else if (next !== p.name) store.renameProject(next);
       else titleInput.value = p.name;
+      fitTitle();
     };
     titleInput.addEventListener("blur", commitTitle);
+    titleInput.addEventListener("input", fitTitle);
     titleInput.addEventListener("keydown", (e) => {
       if (e.isComposing) return;
       if (e.key === "Enter") {
@@ -780,7 +791,10 @@
     sc.on("project", (d) => {
       const p = store.project();
       if (!p) return;
-      if (document.activeElement !== titleInput) titleInput.value = p.name;
+      if (document.activeElement !== titleInput) {
+        titleInput.value = p.name;
+        fitTitle();
+      }
       const f = d.fields;
       if (f.includes("*") || f.includes("structure")) return; // the entries event does the full refresh
       if (f.includes("languages") || f.includes("sourceLang")) {
@@ -823,6 +837,8 @@
     grid.setDensity(store.state.settings.density);
     refreshAll();
     setInspector(inspectorOpen);
+    fitTitle();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitTitle);
     if (params && params.key) setTimeout(() => reveal(params.key), 0);
 
     return {

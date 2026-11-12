@@ -70,7 +70,7 @@
       const width = el.clientWidth || 1200;
       narrow = width < 640;
       // On phones the key column may not eat the whole screen.
-      const keyW = narrow ? Math.min(util.clamp(v.keyWidth || 250, 120, KEY_MAX), Math.round(width * 0.42)) : util.clamp(v.keyWidth || 250, KEY_MIN, KEY_MAX);
+      const keyW = narrow ? Math.min(util.clamp(v.keyWidth || 250, 120, KEY_MAX), Math.round(width * 0.46)) : util.clamp(v.keyWidth || 250, KEY_MIN, KEY_MAX);
       const colDefault = narrow ? Math.max(170, Math.round(width * 0.5)) : COL_DEFAULT;
       let total = keyW + FILL_W;
       let anyAuto = false;

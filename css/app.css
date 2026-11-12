@@ -140,6 +140,10 @@
 .nav-item.active .icon {
   color: var(--text);
 }
+.nav-item[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
+}
 .nav-item .count {
   margin-left: auto;
 }
@@ -326,8 +330,10 @@
   white-space: nowrap;
 }
 .title-edit {
+  flex: 0 1 auto;
+  width: 120px;
   min-width: 40px;
-  max-width: 360px;
+  max-width: min(360px, 100%);
   margin: 0 -6px;
   padding: 3px 6px;
   border: 1px solid transparent;
@@ -337,7 +343,6 @@
   font-weight: 600;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
-  field-sizing: content;
 }
 .title-edit:hover {
   background: var(--surface-3);
@@ -531,10 +536,10 @@
   .toolbar {
     flex-wrap: wrap;
   }
-  .toolbar-end {
+  .toolbar .toolbar-end {
     display: contents;
   }
-  .toolbar-search {
+  .toolbar .toolbar-search {
     order: 1;
     flex: 1 1 0;
     max-width: none;
@@ -566,6 +571,17 @@
   }
   .toolbar .tb-inspector {
     display: none;
+  }
+  /* Row actions live in the details panel on small screens; the key needs the room. */
+  .row-actions {
+    display: none;
+  }
+  .gc-key {
+    gap: 6px;
+    padding-left: 10px;
+  }
+  .gh-key {
+    padding-left: 10px;
   }
 }
 .toolbar {
@@ -833,6 +849,23 @@
   background: var(--row-bg);
   border-right: 1px solid var(--border);
 }
+.grid[data-density="comfortable"] .gc-key,
+.grid[data-density="tall"] .gc-key {
+  align-items: flex-start;
+  padding-top: 9px;
+}
+.grid[data-density="comfortable"] .gc-key .row-check,
+.grid[data-density="tall"] .gc-key .row-check {
+  margin-top: 2px;
+}
+.grid[data-density="comfortable"] .gc-key .key-pin,
+.grid[data-density="tall"] .gc-key .key-pin {
+  margin-top: 4px;
+}
+.grid[data-density="comfortable"] .gc-key .row-actions,
+.grid[data-density="tall"] .gc-key .row-actions {
+  margin-top: -2px;
+}
 .grid.scrolled-x .gc-key,
 .grid.scrolled-x .gh-key {
   box-shadow: var(--shadow-edge);
@@ -875,16 +908,17 @@
   line-height: 20px;
   white-space: nowrap;
 }
+/* The namespace gives way first, so the last segment (the part that differs) stays readable. */
 .key-ns {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 1000 auto;
+  min-width: 3ch;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-3);
 }
 .key-leaf {
-  flex: 0 0 auto;
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text);
@@ -2501,14 +2535,7 @@
     padding: 0 8px 0 10px;
   }
   .toolbar {
-    flex-wrap: wrap;
     padding: 8px 10px;
-  }
-  .toolbar-search {
-    flex: 1 1 100%;
-  }
-  .toolbar-end {
-    margin-left: auto;
   }
   .page-inner {
     padding: 20px 16px 64px;
