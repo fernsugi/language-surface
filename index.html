@@ -1,53 +1,122 @@
 <!doctype html>
 <html lang="en">
-
-<head>
+  <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Language Surface</title>
-    <link rel="icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="./styles.css" />
-</head>
-
-<body>
-    <div class="app" id="app">
-        <div class="topbar">
-            <div class="brand">
-                <div class="logo"></div>
-                <div>
-                    <h1>Language Surface <span class="pill" id="pillProject">Project: —</span></h1>
-                    <span class="sub">Local-first translation manager</span>
-                </div>
-            </div>
-            <div class="nav">
-                <button class="btn" id="btnList" type="button">List</button>
-                <button class="btn" id="btnSettings" type="button">Settings</button>
-            </div>
-        </div>
-
-        <div id="view"></div>
+    <meta name="description" content="A local-first translation manager that runs entirely in your browser. Edit every language side by side, import and export CSV or JSON, and translate with your own AI key." />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f4f6f8" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="./favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      (function () {
+        var theme = "system";
+        try {
+          theme = localStorage.getItem("language-surface:theme") || "system";
+        } catch (e) {}
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", theme);
+        // Fetch the interface font early. (Skipped when opened from disk, where preloads are blocked.)
+        if (location.protocol.indexOf("http") === 0) {
+          var link = document.createElement("link");
+          link.rel = "preload";
+          link.as = "font";
+          link.type = "font/woff2";
+          link.href = "./assets/fonts/geist-latin.woff2";
+          link.crossOrigin = "anonymous";
+          document.head.appendChild(link);
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./css/tokens.css" />
+    <link rel="stylesheet" href="./css/base.css" />
+    <link rel="stylesheet" href="./css/components.css" />
+    <link rel="stylesheet" href="./css/app.css" />
+    <style>
+      .boot {
+        display: grid;
+        place-items: center;
+        height: 100vh;
+        height: 100dvh;
+      }
+      .boot-mark {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        opacity: 0;
+        animation: boot-in 0.4s 0.25s ease-out forwards;
+      }
+      .boot-error {
+        max-width: 420px;
+        padding: 24px;
+        text-align: center;
+      }
+      .boot-error h1 {
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+      .boot-error p {
+        color: var(--text-2);
+        margin-bottom: 16px;
+      }
+      .boot-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+      }
+      @keyframes boot-in {
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="boot">
+      <img class="boot-mark" src="./favicon.svg" alt="" width="44" height="44" />
     </div>
+    <noscript>
+      <div style="max-width: 420px; margin: 20vh auto; padding: 24px; text-align: center; font-family: system-ui, sans-serif">
+        <h1 style="font-size: 18px">Language Surface needs JavaScript</h1>
+        <p>The app runs entirely in your browser, so JavaScript has to be enabled.</p>
+      </div>
+    </noscript>
 
-    <div class="modalBack" id="modalBack" aria-hidden="true">
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalDesc">
-            <div class="mhd">
-                <h3 id="modalTitle">Confirm</h3>
-                <p id="modalDesc"></p>
-            </div>
-            <div class="mbd" id="modalBody"></div>
-            <div class="mft">
-                <button class="btn" id="modalCancel" type="button">Cancel</button>
-                <button class="btn primary" id="modalOK" type="button">OK</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="toast" id="toast" aria-live="polite" aria-atomic="true">
-        <p class="t1" id="toastMsg"></p>
-        <p class="t2" id="toastSub"></p>
-    </div>
-
-    <script src="./app.js"></script>
-</body>
-
+    <!-- Plain scripts in dependency order: no build step, works from any static host or straight from disk. -->
+    <script defer src="./js/core/util.js"></script>
+    <script defer src="./js/core/langs.js"></script>
+    <script defer src="./js/core/keys.js"></script>
+    <script defer src="./js/core/csv.js"></script>
+    <script defer src="./js/core/text.js"></script>
+    <script defer src="./js/core/importer.js"></script>
+    <script defer src="./js/core/exporter.js"></script>
+    <script defer src="./js/core/zip.js"></script>
+    <script defer src="./js/core/ai.js"></script>
+    <script defer src="./js/store/ops.js"></script>
+    <script defer src="./js/store/migrate.js"></script>
+    <script defer src="./js/store/db.js"></script>
+    <script defer src="./js/store/store.js"></script>
+    <script defer src="./js/ui/icons.js"></script>
+    <script defer src="./js/ui/dom.js"></script>
+    <script defer src="./js/ui/overlay.js"></script>
+    <script defer src="./js/views/shell.js"></script>
+    <script defer src="./js/views/pickers.js"></script>
+    <script defer src="./js/views/grid.js"></script>
+    <script defer src="./js/views/inspector.js"></script>
+    <script defer src="./js/views/translate.js"></script>
+    <script defer src="./js/views/tools.js"></script>
+    <script defer src="./js/views/io.js"></script>
+    <script defer src="./js/views/translations.js"></script>
+    <script defer src="./js/views/pages.js"></script>
+    <script defer src="./js/views/settings.js"></script>
+    <script defer src="./js/views/extras.js"></script>
+    <script defer src="./js/main.js"></script>
+  </body>
 </html>
