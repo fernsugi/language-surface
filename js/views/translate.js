@@ -72,13 +72,21 @@
     const controller = o.controller || new AbortController();
     const gate = { until: 0 };
     const group = "ai:" + util.uid("run");
-    const result = { ok: 0, failed: [], overLimit: 0, aborted: false, cells: [] };
+    const projectId = p.id;
+    // The project object can be replaced while we wait (another tab saved); always go by id.
+    const live = () => {
+      const cur = store.project();
+      return cur && cur.id === projectId ? cur : null;
+    };
+    const result = { ok: 0, changed: 0, failed: [], overLimit: 0, aborted: false, cells: [], done: new Set() };
     let done = 0;
 
     await ai.runQueue(
       tasks,
       async (task) => {
         if (controller.signal.aborted) return;
+        const before = live();
+        if (!before) return controller.abort(); // the user moved to another project: stop spending requests
         if (o.onStart) o.onStart(task);
         try {
           const res = await ai.withRetry(
@@ -89,17 +97,23 @@
                 sourceLang: source,
                 targetLang: task.lang,
                 maxChars: o.maxChars,
-                glossary: p.glossary,
-                context: p.context,
+                glossary: before.glossary,
+                context: before.context,
                 signal: controller.signal,
               }),
             { signal: controller.signal, gate, onWait: o.onWait }
           );
-          // The project may have changed while we waited; only write where it is still valid.
-          if (store.project() === p && store.hasKey(task.key, p) && p.languages.includes(task.lang)) {
-            store.setValue(task.key, task.lang, res.text, { group, label: "AI translate" });
+          const cur = live();
+          if (!cur) return controller.abort();
+          result.done.add(task);
+          // The key or language may have been removed while we waited; only write where it still exists.
+          if (store.hasKey(task.key, cur) && cur.languages.includes(task.lang)) {
+            const changed = store.setValue(task.key, task.lang, res.text, { group, label: "AI translate" });
             result.ok++;
-            result.cells.push({ key: task.key, lang: task.lang });
+            if (changed) {
+              result.changed++;
+              result.cells.push({ key: task.key, lang: task.lang });
+            }
             if (res.overLimit) result.overLimit++;
           }
         } catch (e) {
@@ -174,8 +188,13 @@
     let dlg = null;
     let controller = null;
 
-    const keysInScope = () => (state.scope === "scoped" && scoped ? scoped : allKeys);
-    const currentPlan = () => plan(p, keysInScope(), state.source, Array.from(state.targets), state.mode);
+    const projectId = p.id;
+    const liveProject = () => {
+      const cur = store.project();
+      return cur && cur.id === projectId ? cur : null;
+    };
+    const keysInScope = () => (state.scope === "scoped" && scoped ? scoped : Object.keys((liveProject() || p).entries));
+    const currentPlan = () => plan(liveProject() || p, keysInScope(), state.source, Array.from(state.targets), state.mode);
 
     /* -- configure -- */
     const summary = h("div.summary");
@@ -301,10 +320,12 @@
     }
 
     /* -- run -- */
-    async function start() {
-      const pl = currentPlan();
-      if (!pl.tasks.length) return;
-      const tasks = pl.tasks;
+    /** @param {Array} [retryTasks] tasks from an earlier attempt that still need doing */
+    async function start(retryTasks) {
+      const project = liveProject();
+      if (!project) return dlg.close(null, true);
+      const tasks = retryTasks || currentPlan().tasks;
+      if (!tasks.length) return;
       controller = new AbortController();
 
       const pctEl = h("span.run-pct", "0%");
@@ -344,7 +365,7 @@
       LS.dom.replaceChildren(dlg.footer, h("span.foot-start", providerLine()), stopBtn);
       dlg.lock(true);
 
-      const result = await run(p, state.source, tasks, {
+      const result = await run(project, state.source, tasks, {
         controller,
         maxChars: state.maxChars,
         onStart: (task) => setStatus(task.key + " → " + langs.label(task.lang)),
@@ -364,7 +385,11 @@
     }
 
     function showResult(result, tasks) {
-      const remaining = tasks.length - result.ok - result.failed.length;
+      const leftover = tasks.filter((t) => !result.done.has(t));
+      const remaining = leftover.length - result.failed.length;
+      // Bound to this run: if the run changed nothing there is nothing to undo, and the button
+      // must never fall through to an earlier, unrelated change.
+      const undoToken = result.changed ? store.undoToken() : null;
       const allGood = !result.failed.length && !result.aborted;
       const fatal = result.failed.find((f) => f.error.fatal);
       const title = allGood ? "Translation complete" : result.aborted && !fatal ? "Translation stopped" : "Finished with problems";
@@ -395,15 +420,16 @@
       LS.dom.replaceChildren(dlg.body, body);
 
       const foot = [h("span.foot-start", providerLine())];
-      if (result.ok) {
+      if (undoToken) {
         foot.push(
           ui.button({
             label: "Undo run",
             icon: "undo-2",
             onClick: () => {
-              store.undo();
+              const undone = store.undoIfLatest(undoToken);
               dlg.close(null);
-              LS.toast("AI translations removed", { duration: 2200 });
+              if (undone) LS.toast("AI translations removed", { duration: 2200 });
+              else LS.toast("Other changes came after this run", { description: "Use " + LS.dom.shortcut("mod+Z") + " to step back through recent changes." });
             },
           })
         );
@@ -418,15 +444,12 @@
             },
           })
         );
-      } else if (result.failed.length || remaining > 0) {
+      } else if (leftover.length) {
         foot.push(
           ui.button({
-            label: "Retry remaining",
+            label: "Retry " + util.formatNumber(leftover.length) + " remaining",
             icon: "refresh-cw",
-            onClick: () => {
-              state.mode = "missing";
-              start();
-            },
+            onClick: () => start(leftover),
           })
         );
       }

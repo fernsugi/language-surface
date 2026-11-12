@@ -47,60 +47,82 @@
   }
 
   /**
-   * Build a nested object from a flat { "a.b.c": value } map.
-   * Bracket indexes rebuild arrays. A key is reported in `conflicts` (and skipped) when it is
-   * both a value and a namespace, e.g. "menu" and "menu.title".
+   * Build a nested object from a flat { "a.b.c": value } map. Bracket indexes rebuild arrays.
+   *
+   * Some keys cannot live in a nested structure. They are left out of the tree and returned in
+   * `conflicts` so the caller can keep them under their full name:
+   *   - a key that sits "inside" another key ("menu.title" when "menu" is itself a key),
+   *     whatever order the keys come in;
+   *   - a key with an empty segment ("Loading...", "Saved.", ".");
+   *   - a second key that resolves to the same path as an earlier one.
+   *
    * @param {Object} flat
    * @param {{hole?: any}} [opts] value used for missing array positions
-   * @returns {{tree: Object, conflicts: string[]}}
+   * @returns {{tree: Object|Array, conflicts: string[]}}
    */
   function nest(flat, opts) {
     const hole = opts && "hole" in opts ? opts.hole : "";
+    const sig = (path, n) => {
+      let out = "";
+      for (let i = 0; i < n; i++) out += (typeof path[i] === "number" ? "#" : "$") + path[i] + "\u0001";
+      return out;
+    };
+
+    // Pass 1: which keys have a usable path, and which path belongs to which key.
+    const paths = new Map();
+    const owner = new Set(); // signatures of full key paths
+    const conflicts = [];
+    for (const key of Object.keys(flat)) {
+      const k = String(key);
+      const path = k === "" || k.split(".").some((part) => part === "") ? [] : parsePath(k);
+      if (!path.length) {
+        conflicts.push(key);
+        continue;
+      }
+      const id = sig(path, path.length);
+      if (owner.has(id)) {
+        conflicts.push(key);
+        continue;
+      }
+      owner.add(id);
+      paths.set(key, path);
+    }
+
+    // Pass 2: a key nested under another key cannot be placed without replacing that key's value.
+    for (const [key, path] of paths) {
+      for (let n = 1; n < path.length; n++) {
+        if (owner.has(sig(path, n))) {
+          paths.delete(key);
+          conflicts.push(key);
+          break;
+        }
+      }
+    }
+
     // Null-prototype containers: segments such as "__proto__" or "constructor" are plain data.
     const root = Object.create(null);
     const containers = new WeakSet([root]);
     const numeric = new WeakMap(); // container -> true while every child segment is an array index
-    const conflicts = [];
-
-    const child = (parent, seg) => {
+    const enter = (parent, seg) => {
       if (typeof seg === "number") {
         if (!numeric.has(parent)) numeric.set(parent, true);
-      } else {
-        numeric.set(parent, false);
-      }
-      return Object.prototype.hasOwnProperty.call(parent, seg) ? parent[seg] : undefined;
+      } else numeric.set(parent, false);
     };
-
-    for (const key of Object.keys(flat)) {
-      const path = parsePath(key);
-      if (!path.length) continue;
+    for (const [key, path] of paths) {
       let cur = root;
-      let blocked = false;
       for (let i = 0; i < path.length - 1; i++) {
         const seg = path[i];
-        const next = child(cur, seg);
+        enter(cur, seg);
+        let next = Object.prototype.hasOwnProperty.call(cur, seg) ? cur[seg] : undefined;
         if (next === undefined) {
-          const made = Object.create(null);
-          containers.add(made);
-          cur[seg] = made;
-          cur = made;
-        } else if (containers.has(next)) {
-          cur = next;
-        } else {
-          blocked = true;
-          break;
+          next = Object.create(null);
+          containers.add(next);
+          cur[seg] = next;
         }
-      }
-      if (blocked) {
-        conflicts.push(key);
-        continue;
+        cur = next;
       }
       const last = path[path.length - 1];
-      const existing = child(cur, last);
-      if (existing !== undefined) {
-        conflicts.push(key);
-        continue;
-      }
+      enter(cur, last);
       cur[last] = flat[key];
     }
 

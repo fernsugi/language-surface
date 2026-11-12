@@ -16,6 +16,31 @@
   let mode = "memory"; // "idb" | "local" | "memory"
   let db = null;
 
+  /* Small synchronous markers (localStorage) that survive independently of IndexedDB. */
+  const MARKER_PREFIX = "language-surface:";
+  function getMarker(name) {
+    try {
+      return localStorage.getItem(MARKER_PREFIX + name);
+    } catch (e) {
+      return null;
+    }
+  }
+  function setMarker(name, value) {
+    try {
+      localStorage.setItem(MARKER_PREFIX + name, value);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  function clearMarkers() {
+    try {
+      localStorage.removeItem(MARKER_PREFIX + "storage");
+      localStorage.removeItem(MARKER_PREFIX + "migrated");
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   function promisify(request) {
     return new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
@@ -31,7 +56,7 @@
     });
   }
 
-  function openIDB() {
+  function openIDB(timeoutMs) {
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (fn, value) => {
@@ -41,7 +66,7 @@
         fn(value);
       };
       // Some browsers never answer when storage is blocked; do not hang the app on that.
-      const timer = setTimeout(() => finish(reject, new Error("IndexedDB did not respond")), 4000);
+      const timer = setTimeout(() => finish(reject, new Error("IndexedDB did not respond")), timeoutMs || 4000);
       let request;
       try {
         request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -55,7 +80,13 @@
       };
       request.onsuccess = () => {
         const d = request.result;
-        d.onversionchange = () => d.close();
+        d.onversionchange = () => {
+          d.close();
+          if (db === d) db = null; // reopened on the next save
+        };
+        d.onclose = () => {
+          if (db === d) db = null; // closed by the browser (e.g. site data cleared): reopen on the next save
+        };
         finish(resolve, d);
       };
       request.onerror = () => finish(reject, request.error || new Error("IndexedDB unavailable"));
@@ -74,17 +105,32 @@
     }
   }
 
-  /** Open storage. Resolves with the mode in use: "idb" | "local" | "memory". */
-  async function open() {
+  /**
+   * Open storage. Resolves with the mode in use: "idb" | "local" | "memory".
+   *
+   * Once IndexedDB has been used on this device, failing to open it is an error rather than a
+   * reason to fall back: silently switching stores would show an empty app and save new work
+   * somewhere the next visit will not look. Pass { allowFallback: true } to start anyway.
+   */
+  async function open(opts) {
+    const expected = getMarker("storage") === "idb" && !(opts && opts.allowFallback);
+    let failure = null;
     if (typeof indexedDB !== "undefined") {
       try {
-        db = await openIDB();
+        db = await openIDB(expected ? 10000 : 4000);
         mode = "idb";
+        setMarker("storage", "idb");
         return mode;
       } catch (e) {
-        console.warn("IndexedDB unavailable, falling back to localStorage:", e);
+        failure = e;
       }
+    } else failure = new Error("IndexedDB is not available");
+    if (expected) {
+      const err = new Error("Your saved projects could not be opened (" + ((failure && failure.message) || "storage unavailable") + ").");
+      err.code = "storage-unavailable";
+      throw err;
     }
+    console.warn("IndexedDB unavailable, falling back:", failure);
     mode = localAvailable() ? "local" : "memory";
     return mode;
   }
@@ -121,18 +167,42 @@
 
   /**
    * Persist changes.
+   *
+   * With IndexedDB, every write and the request to commit are issued before this function first
+   * yields, so a save started while the page is closing is already in the browser's hands and
+   * does not depend on this page living long enough to hear back.
+   *
    * @param {{settings?, ui?, flags?, projects?: Object[], deleted?: string[]}} patch only what changed
    * @param {Object} fullState the complete state (used by the single-document fallback)
    */
   async function save(patch, fullState) {
     if (mode === "idb") {
-      const tx = db.transaction(["projects", "kv"], "readwrite");
+      if (!db) db = await openIDB(); // the connection was closed (e.g. by an upgrade in another tab)
+      let tx;
+      try {
+        tx = db.transaction(["projects", "kv"], "readwrite");
+      } catch (e) {
+        db = null; // the connection is unusable; open a fresh one next time
+        throw e;
+      }
       const done = txDone(tx);
-      const kv = tx.objectStore("kv");
-      const store = tx.objectStore("projects");
-      for (const k of META_KEYS) if (patch[k] !== undefined) kv.put(patch[k], k);
-      for (const p of patch.projects || []) store.put(p);
-      for (const id of patch.deleted || []) store.delete(id);
+      try {
+        const kv = tx.objectStore("kv");
+        const store = tx.objectStore("projects");
+        for (const k of META_KEYS) if (patch[k] !== undefined) kv.put(patch[k], k);
+        // Deletes first, so an id that is (wrongly) in both lists ends up kept, not lost.
+        for (const id of patch.deleted || []) store.delete(id);
+        for (const p of patch.projects || []) store.put(p);
+        if (typeof tx.commit === "function") tx.commit();
+      } catch (e) {
+        done.catch(() => {});
+        try {
+          tx.abort();
+        } catch (e2) {
+          /* already finished */
+        }
+        throw e;
+      }
       await done;
       return;
     }
@@ -219,6 +289,9 @@
     clear,
     estimate,
     requestPersistence,
+    getMarker,
+    setMarker,
+    clearMarkers,
     get mode() {
       return mode;
     },

@@ -178,7 +178,7 @@
       const rowsEl = rules.map((g) => {
         const commit = (field, input) => {
           const value = input.value.trim();
-          if (value === g[field]) return;
+          if (value === g[field] || !sc.alive()) return;
           const res = store.updateRule(g.id, { [field]: value });
           if (!res.ok) {
             LS.toast(res.error, { type: "error" });
@@ -189,7 +189,7 @@
           const input = h("input.term-input", { type: "text", value: g[field], "aria-label": label, autocomplete: "off" });
           input.addEventListener("blur", () => commit(field, input));
           input.addEventListener("keydown", (e) => {
-            if (e.isComposing) return;
+            if (LS.dom.isIME(e)) return;
             if (e.key === "Enter") input.blur();
             else if (e.key === "Escape") {
               input.value = g[field];
@@ -253,15 +253,17 @@
         "aria-label": "Instructions for AI translation",
       });
       const savedNote = h("span.field-hint", "Sent with every AI translation in this project.");
+      // Only ever written to the project this page was opened for.
+      const saveContext = () => {
+        clearTimeout(contextTimer);
+        if (sc.alive() && contextInput.isConnected && !LS.dom.sameText(contextInput.value, store.project().context)) store.setContext(contextInput.value);
+      };
       contextInput.addEventListener("input", () => {
         LS.dom.autosize(contextInput);
         clearTimeout(contextTimer);
-        contextTimer = setTimeout(() => store.setContext(contextInput.value), 500);
+        contextTimer = setTimeout(saveContext, 500);
       });
-      contextInput.addEventListener("blur", () => {
-        clearTimeout(contextTimer);
-        if (store.project() && contextInput.value !== store.project().context) store.setContext(contextInput.value);
-      });
+      contextInput.addEventListener("blur", saveContext);
 
       if (keepContextFocus) {
         // Typing in the instructions box triggered this refresh; leave the page alone.
@@ -294,12 +296,15 @@
       if (d.fields.includes("glossary") || d.fields.includes("languages") || d.fields.includes("sourceLang") || d.fields.includes("context") || d.fields.includes("*") || d.fields.includes("structure")) render();
     });
     render();
+    const flush = () => {
+      clearTimeout(contextTimer);
+      const input = page.querySelector(".context-input");
+      if (input && sc.alive() && !LS.dom.sameText(input.value, store.project().context)) store.setContext(input.value);
+    };
     return {
+      flush,
       destroy() {
-        clearTimeout(contextTimer);
-        const p = store.project();
-        const input = page.querySelector(".context-input");
-        if (p && input && input.value !== p.context) store.setContext(input.value);
+        flush();
         sc.destroy();
       },
     };

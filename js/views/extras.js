@@ -104,6 +104,13 @@
     return -1;
   }
 
+  /** The better (lower) of two scores, where a negative score means "no match". */
+  function best(a, b) {
+    if (a < 0) return b;
+    if (b < 0) return a;
+    return Math.min(a, b);
+  }
+
   function openPalette() {
     if (paletteOpen) return;
     paletteOpen = true;
@@ -126,7 +133,7 @@
       const projects = store
         .projectList()
         .filter((pr) => !p || pr.id !== p.id)
-        .map((pr) => ({ pr, s: q ? score(pr.name, q) : 0 }))
+        .map((pr) => ({ pr, s: q ? best(score(pr.name, q), score("Switch to " + pr.name, q)) : 0 }))
         .filter((x) => x.s >= 0)
         .sort((a, b) => a.s - b.s)
         .slice(0, 6)
@@ -213,7 +220,7 @@
 
     input.addEventListener("input", build);
     input.addEventListener("keydown", (e) => {
-      if (e.isComposing) return;
+      if (LS.dom.isIME(e)) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         if (items.length) index = (index + 1) % items.length;

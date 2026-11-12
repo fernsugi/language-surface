@@ -64,19 +64,33 @@
     const languages = LS.util.uniq((Array.isArray(r.languages) ? r.languages : []).map(LS.langs.normalize).filter(Boolean));
     if (!languages.length) languages.push("en");
 
+    // Language codes inside entries are stored in canonical form. Hand-edited backups may use
+    // "pt_BR" or "EN"; remap those (only when needed: this runs on every load).
+    const rawLangs = Array.isArray(r.languages) ? r.languages : [];
+    const remap = rawLangs.some((l) => typeof l !== "string" || l !== LS.langs.normalize(l));
     const entries = Object.create(null);
     const src = r.entries && typeof r.entries === "object" ? r.entries : {};
     for (const key of Object.keys(src)) {
       const value = src[key];
-      entries[key] = newEntry(value && typeof value === "object" ? value : null);
+      const entry = newEntry(value && typeof value === "object" ? value : null);
+      if (remap) {
+        for (const code of Object.keys(entry)) {
+          const norm = LS.langs.normalize(code);
+          if (norm && norm !== code) {
+            if (entry[norm] === undefined || entry[norm] === "") entry[norm] = entry[code];
+            delete entry[code];
+          }
+        }
+      }
+      entries[key] = entry;
     }
 
     const glossary = (Array.isArray(r.glossary) ? r.glossary : [])
       .filter((g) => g && typeof g.from === "string" && typeof g.to === "string" && g.from && g.to)
       .map((g) => ({
         id: g.id || uid("g"),
-        sourceLang: String(g.sourceLang || "all").toLowerCase(),
-        targetLang: String(g.targetLang || "all").toLowerCase(),
+        sourceLang: LS.langs.normalize(g.sourceLang) || "all",
+        targetLang: LS.langs.normalize(g.targetLang) || "all",
         from: g.from,
         to: g.to,
       }));
@@ -281,6 +295,25 @@
     return { structural, cells, meta, single: !structural && !meta && cells === 1 ? last : null };
   }
 
+  /**
+   * Apply this tab's not-yet-saved cell edits on top of another tab's version of the project.
+   * @param {Object} remote project as just read from storage (modified in place and returned)
+   * @param {Object} local  the in-memory project holding the unsaved edits
+   * @param {Iterable<string>} cellIds "key\u0000lang" identifiers of the edited cells
+   */
+  function mergeUnsavedCells(remote, local, cellIds) {
+    for (const id of cellIds) {
+      const i = id.indexOf("\u0000");
+      const key = id.slice(0, i);
+      const lang = id.slice(i + 1);
+      if (!has(remote.entries, key) || !has(local.entries, key) || !remote.languages.includes(lang)) continue;
+      const value = local.entries[key][lang];
+      if (typeof value === "string") remote.entries[key][lang] = value;
+      else delete remote.entries[key][lang];
+    }
+    return remote;
+  }
+
   /* ---- Stats ---------------------------------------------------------------- */
 
   /** @returns {{total: number, filled: Object<string, number>, complete: number}} */
@@ -363,6 +396,7 @@
     applyOp,
     applyOps,
     describeOps,
+    mergeUnsavedCells,
     computeStats,
     sampleProject,
   };

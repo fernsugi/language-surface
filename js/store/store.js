@@ -31,7 +31,6 @@
 
   const dirty = { settings: false, ui: false, flags: false, projects: new Set(), deleted: new Set() };
   let saveStatus = "saved";
-  let saving = false;
   let channel = null;
   const tabId = util.uid("tab");
 
@@ -102,9 +101,38 @@
 
   /* ---- Persistence ------------------------------------------------------------- */
 
-  const scheduleSave = util.debounce(() => {
-    flush();
-  }, 250);
+  const SAVE_MIN_GAP = 400;
+  let saveTimer = null;
+  let lastSaveAt = 0;
+  let lastSaveMs = 0;
+  // What this tab changed and has not written yet, per project: used to merge with other tabs.
+  const unsaved = new Map(); // projectId -> { cells: Set<"key\0lang">, structural: boolean }
+  // Saves handed to storage and not confirmed yet. Normally there is at most one; a second can
+  // overlap when the page is hidden or closed while a save is still running.
+  const jobs = new Set(); // { snapshot, cells: Map<projectId, {cells, structural}>, promise }
+
+  function noteUnsaved(id, opList) {
+    let u = unsaved.get(id);
+    if (!u) unsaved.set(id, (u = { cells: new Set(), structural: false }));
+    for (const op of opList) {
+      if (op.t === "set") u.cells.add(op.key + "\u0000" + op.lang);
+      else u.structural = true;
+    }
+  }
+
+  /**
+   * Write-behind with a bounded delay: the first change after a quiet period is written at once,
+   * and during a burst (typing, an AI run) storage is updated at least every SAVE_MIN_GAP ms.
+   */
+  function scheduleSave() {
+    if (saveTimer !== null || jobs.size) return;
+    const gap = Math.max(SAVE_MIN_GAP, lastSaveMs * 4);
+    const wait = Math.max(0, lastSaveAt + gap - Date.now());
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      flush();
+    }, wait);
+  }
 
   function setSaveStatus(status, error) {
     if (saveStatus === status && !error) return;
@@ -130,12 +158,13 @@
     scheduleSave();
   }
 
-  /** Write pending changes now. Safe to call often; concurrent calls are chained. */
-  async function flush() {
-    scheduleSave.cancel();
-    if (saving) return;
-    if (!hasPendingChanges()) return;
-    saving = true;
+  /**
+   * Hand everything that is pending to storage, within this call (the storage layer issues its
+   * writes and asks for the commit before returning), and return the job tracking it.
+   */
+  function startSave() {
+    const startedAt = Date.now();
+    lastSaveAt = startedAt;
     const patch = {
       settings: dirty.settings ? state.settings : undefined,
       ui: dirty.ui ? state.ui : undefined,
@@ -152,35 +181,100 @@
       projects: new Set(dirty.projects),
       deleted: new Set(dirty.deleted),
     };
+    const job = { snapshot, cells: new Map(), promise: null };
+    for (const id of snapshot.projects) {
+      if (unsaved.has(id)) {
+        job.cells.set(id, unsaved.get(id));
+        unsaved.delete(id);
+      }
+    }
     dirty.settings = dirty.ui = dirty.flags = false;
     dirty.projects.clear();
     dirty.deleted.clear();
-    setSaveStatus("saving");
-    try {
-      await db.save(patch, Object.assign({}, state, { flags }));
-      if (channel && (patch.projects.length || patch.deleted.length || patch.settings)) {
-        channel.postMessage({
-          type: "saved",
-          tabId,
-          projects: patch.projects.map((p) => p.id),
-          deleted: patch.deleted,
-          settings: !!patch.settings,
+    jobs.add(job);
+
+    job.promise = db.save(patch, Object.assign({}, state, { flags })).then(
+      () => {
+        jobs.delete(job);
+        lastSaveMs = Date.now() - startedAt;
+        if (channel && (patch.projects.length || patch.deleted.length || patch.settings)) {
+          channel.postMessage({
+            type: "saved",
+            tabId,
+            projects: patch.projects.map((p) => p.id),
+            deleted: patch.deleted,
+            settings: !!patch.settings,
+          });
+        }
+        return true;
+      },
+      (e) => {
+        console.error("Saving failed:", e);
+        jobs.delete(job);
+        lastSaveMs = Date.now() - startedAt;
+        // Put everything back so a later attempt retries it. A project that was deleted and then
+        // restored while this save was running must not end up in both lists.
+        dirty.settings = dirty.settings || snapshot.settings;
+        dirty.ui = dirty.ui || snapshot.ui;
+        dirty.flags = dirty.flags || snapshot.flags;
+        snapshot.projects.forEach((id) => {
+          if (state.projects[id]) dirty.projects.add(id);
         });
+        snapshot.deleted.forEach((id) => {
+          if (!state.projects[id]) dirty.deleted.add(id);
+        });
+        for (const [id, u] of job.cells) {
+          if (!state.projects[id]) continue;
+          const cur = unsaved.get(id);
+          if (!cur) unsaved.set(id, u);
+          else {
+            u.cells.forEach((c) => cur.cells.add(c));
+            cur.structural = cur.structural || u.structural;
+          }
+        }
+        setSaveStatus("error", e);
+        return false;
       }
-      saving = false;
-      if (hasPendingChanges()) return flush();
-      setSaveStatus("saved");
-    } catch (e) {
-      console.error("Saving failed:", e);
-      // Put the flags back so a later attempt retries everything.
-      dirty.settings = dirty.settings || snapshot.settings;
-      dirty.ui = dirty.ui || snapshot.ui;
-      dirty.flags = dirty.flags || snapshot.flags;
-      snapshot.projects.forEach((id) => dirty.projects.add(id));
-      snapshot.deleted.forEach((id) => dirty.deleted.add(id));
-      saving = false;
-      setSaveStatus("error", e);
+    );
+    setSaveStatus("saving");
+    return job;
+  }
+
+  /** Resolves when every save that is running right now has finished. */
+  function settle() {
+    return Promise.all(Array.from(jobs, (job) => job.promise));
+  }
+
+  /**
+   * Write pending changes.
+   * @param {boolean|{all?: boolean, now?: boolean}} [opts]
+   *   all (or `true`): keep going until nothing is pending.
+   *   now: do not queue behind a save that is still running. Used when the page is being hidden
+   *        or closed, which may be the last chance: the changes are handed to storage before
+   *        this function returns.
+   */
+  async function flush(opts) {
+    const o = opts === true ? { all: true } : opts || {};
+    if (saveTimer !== null) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
     }
+    if (jobs.size && !o.now) {
+      // The running save reschedules when it finishes; `all` callers wait and go again.
+      if (!o.all) return;
+      await settle();
+      return flush(o);
+    }
+    if (!hasPendingChanges()) {
+      if (o.all) await settle();
+      return;
+    }
+    const ok = await startSave().promise;
+    if (!ok) return; // status is "error"; the next change, or the retry button, tries again
+    if (jobs.size) return; // an overlapping save is still running and finishes the bookkeeping
+    if (!hasPendingChanges()) return setSaveStatus("saved");
+    if (o.all) return flush({ all: true });
+    scheduleSave();
   }
 
   function mirrorTheme() {
@@ -195,23 +289,25 @@
 
   /**
    * Load saved data (migrating from the original app when needed).
+   *
+   * Errors are deliberately not swallowed here: if existing data cannot be opened or read, the
+   * app must stop rather than start "empty", because starting empty would let older data
+   * (the original app's localStorage, or nothing at all) be written over the real projects.
+   *
+   * @param {{allowFallback?: boolean}} [opts] start even when the usual storage cannot be opened
    * @returns {Promise<{mode: string, migrated: boolean, firstRun: boolean}>}
    */
-  async function init() {
-    const mode = await db.open();
+  async function init(opts) {
+    const mode = await db.open(opts);
+    const loaded = await db.loadAll();
     let migrated = false;
-    let loaded = null;
-    try {
-      loaded = await db.loadAll();
-    } catch (e) {
-      console.error("Could not load saved data:", e);
-    }
 
     if (loaded) {
       flags = loaded.flags && typeof loaded.flags === "object" ? loaded.flags : {};
       state = migrate.normalizeState(loaded);
     } else {
-      const legacy = readLegacy();
+      // Migrate from the original app exactly once.
+      const legacy = db.getMarker("migrated") ? null : readLegacy();
       const converted = legacy ? migrate.fromV1(legacy) : null;
       if (converted) {
         state = converted;
@@ -219,7 +315,8 @@
         migrated = true;
         dirty.settings = dirty.ui = dirty.flags = true;
         Object.keys(state.projects).forEach((id) => dirty.projects.add(id));
-        await flush();
+        await flush(true);
+        if (saveStatus !== "error") db.setMarker("migrated", "1");
       } else {
         state = migrate.emptyState();
         flags = {};
@@ -227,19 +324,13 @@
     }
     mirrorTheme();
 
-    if (typeof BroadcastChannel !== "undefined") {
+    if (typeof BroadcastChannel !== "undefined" && !channel) {
       try {
         channel = new BroadcastChannel("language-surface");
         channel.onmessage = (ev) => onRemoteSave(ev.data);
       } catch (e) {
         channel = null;
       }
-    }
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "hidden") flush();
-      });
-      window.addEventListener("pagehide", () => flush());
     }
     return { mode, migrated, firstRun: !loaded && !migrated };
   }
@@ -253,47 +344,92 @@
     }
   }
 
-  /** Another tab saved: pull its changes in so this tab never overwrites them with stale data. */
+  /** Everything this tab changed in a project that storage does not have yet. */
+  function pendingFor(id) {
+    const cells = new Set();
+    let any = false;
+    let structural = false;
+    const add = (u) => {
+      any = true;
+      u.cells.forEach((c) => cells.add(c));
+      structural = structural || u.structural;
+    };
+    const mine = unsaved.get(id);
+    if (mine) add(mine);
+    else if (dirty.projects.has(id)) any = structural = true; // changed in a way that is not tracked per cell
+    for (const job of jobs) {
+      const u = job.cells.get(id);
+      if (u) add(u);
+      else if (job.snapshot.projects.has(id)) any = structural = true;
+    }
+    return { cells, structural, any };
+  }
+
+  /**
+   * Another tab saved. Take its version of each project, re-applying the cells this tab has
+   * edited but not saved yet, so that two tabs working on different cells never undo each other.
+   * (If this tab has unsaved structural changes — keys or languages added, removed, renamed —
+   * it keeps its own version; the next save then decides.)
+   */
   async function onRemoteSave(msg) {
     if (!msg || msg.tabId === tabId) return;
     if (msg.type === "reset") return location.reload();
     if (msg.type !== "saved") return;
     try {
-      const ids = (msg.projects || []).filter((id) => !dirty.projects.has(id));
-      const res = await db.reload(ids, !!msg.settings && !dirty.settings);
+      const ids = msg.projects || [];
+      const res = await db.reload(ids, !!msg.settings);
       let listChanged = false;
-      const current = state.ui.selectedProjectId;
       let currentChanged = false;
+      let currentRemoved = false;
+      const current = state.ui.selectedProjectId;
+
       for (const id of Object.keys(res.projects)) {
-        if (!state.projects[id]) listChanged = true;
-        state.projects[id] = ops.normalizeProject(res.projects[id]);
+        const local = state.projects[id];
+        // Decided after the read: edits made while it was in progress must be seen here.
+        const pending = pendingFor(id);
+        if (local && pending.any && pending.structural) continue;
+        const remote = ops.normalizeProject(res.projects[id]);
+        if (local && pending.any) {
+          ops.mergeUnsavedCells(remote, local, pending.cells);
+          touchProject(id);
+        }
+        if (!local) listChanged = true;
+        else if (local.name !== remote.name) listChanged = true;
+        state.projects[id] = remote;
         histories.delete(id);
         bump(id);
-        reconcileView(state.projects[id]);
+        reconcileView(remote);
         if (id === current) currentChanged = true;
       }
+
       for (const id of (msg.deleted || []).concat(res.missing)) {
-        if (state.projects[id] && !dirty.projects.has(id)) {
-          delete state.projects[id];
-          delete state.ui.views[id];
-          histories.delete(id);
-          listChanged = true;
-          if (id === current) {
-            state.ui.selectedProjectId = Object.keys(state.projects)[0] || null;
-            currentChanged = true;
-          }
+        if (!state.projects[id] || pendingFor(id).any) continue;
+        if (id === current) {
+          emit("before-project-change", { reason: "sync" });
+          currentRemoved = true;
+        }
+        delete state.projects[id];
+        delete state.ui.views[id];
+        histories.delete(id);
+        unsaved.delete(id);
+        listChanged = true;
+        if (id === current) {
+          const next = projectList()[0];
+          state.ui.selectedProjectId = next ? next.id : null;
         }
       }
-      if (res.settings) {
+
+      if (res.settings && !dirty.settings) {
         state.settings = migrate.normalizeSettings(res.settings);
         mirrorTheme();
         emit("settings", { path: "*" });
       }
-      if (listChanged || currentChanged) emit("projects", { reason: "sync" });
-      if (currentChanged) {
-        emit("project", { fields: ["*"] });
-        emit("entries", { kind: "structure" });
-        emit("history", {});
+      if (currentRemoved) {
+        emit("projects", { reason: "sync" });
+        emitProjectSwitched();
+      } else {
+        if (listChanged) emit("projects", { reason: "meta" });
+        if (currentChanged) emitProjectSwitched();
       }
     } catch (e) {
       console.warn("Could not sync changes from another tab:", e);
@@ -385,6 +521,7 @@
       if (h.undo.length > HISTORY_LIMIT) h.undo.shift();
     }
     h.redo.length = 0;
+    noteUnsaved(p.id, opList);
     touchProject(p.id);
     announce(p, opList);
     return true;
@@ -409,6 +546,7 @@
     h[to].push({ id: ++historySeq, label: entry.label, ops: back, at: Date.now(), group: null });
     p.meta.updatedAt = Date.now();
     bump(p.id);
+    noteUnsaved(p.id, entry.ops);
     touchProject(p.id);
     syncViewForOps(p, entry.ops);
     reconcileView(p);
@@ -502,13 +640,14 @@
   /* ---- Projects ------------------------------------------------------------------- */
 
   function addProject(p, select) {
+    if (select !== false) emit("before-project-change", { reason: "added" });
     state.projects[p.id] = p;
     state.ui.views[p.id] = migrate.defaultView(p);
     bump(p.id);
     touchProject(p.id);
     if (select !== false) state.ui.selectedProjectId = p.id;
     touchUI();
-    emit("projects", { reason: "added", id: p.id });
+    emit("projects", { reason: select !== false ? "added" : "meta", id: p.id });
     if (select !== false) emitProjectSwitched();
     return p;
   }
@@ -547,6 +686,7 @@
 
   function selectProject(id) {
     if (!state.projects[id] || state.ui.selectedProjectId === id) return;
+    emit("before-project-change", { reason: "selected" });
     state.ui.selectedProjectId = id;
     touchUI();
     emit("projects", { reason: "selected", id });
@@ -557,12 +697,14 @@
   function deleteProject(id) {
     const p = project(id);
     if (!p) return null;
+    const wasCurrent = state.ui.selectedProjectId === p.id;
+    if (wasCurrent) emit("before-project-change", { reason: "deleted" });
     const viewState = state.ui.views[p.id];
     delete state.projects[p.id];
     delete state.ui.views[p.id];
     dirty.projects.delete(p.id);
     dirty.deleted.add(p.id);
-    const wasCurrent = state.ui.selectedProjectId === p.id;
+    unsaved.delete(p.id);
     if (wasCurrent) {
       const next = projectList()[0];
       state.ui.selectedProjectId = next ? next.id : null;
@@ -576,6 +718,7 @@
   function restoreProject(removed) {
     if (!removed || !removed.project) return;
     const p = removed.project;
+    emit("before-project-change", { reason: "added" });
     state.projects[p.id] = p;
     state.ui.views[p.id] = removed.view || migrate.defaultView(p);
     bump(p.id);
@@ -602,7 +745,7 @@
    */
   function setValue(key, lang, value, opts) {
     const p = project();
-    if (!p || !ops.hasKey(p, key)) return false;
+    if (!p || !ops.hasKey(p, key) || !p.languages.includes(lang)) return false;
     const o = opts || {};
     const text = String(value == null ? "" : value);
     const coalesce = o.coalesce ? key + "\u0000" + lang : null;
@@ -613,7 +756,7 @@
   function setValues(changes, label) {
     const p = project();
     if (!p || !changes.length) return false;
-    const list = changes.filter((c) => ops.hasKey(p, c.key)).map((c) => ({ t: "set", key: c.key, lang: c.lang, value: String(c.value == null ? "" : c.value) }));
+    const list = changes.filter((c) => ops.hasKey(p, c.key) && p.languages.includes(c.lang)).map((c) => ({ t: "set", key: c.key, lang: c.lang, value: String(c.value == null ? "" : c.value) }));
     return commit(p, label || "Edit " + util.plural(list.length, "translation"), list);
   }
 
@@ -866,11 +1009,17 @@
 
   /** Erase everything this app stored in this browser. */
   async function resetAll() {
-    scheduleSave.cancel();
+    emit("before-project-change", { reason: "reset" });
+    if (saveTimer !== null) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
     dirty.settings = dirty.ui = dirty.flags = false;
     dirty.projects.clear();
     dirty.deleted.clear();
+    unsaved.clear();
     await db.clear();
+    db.clearMarkers();
     try {
       localStorage.removeItem(migrate.LEGACY_KEY);
       localStorage.removeItem(THEME_MIRROR_KEY);

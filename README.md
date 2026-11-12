@@ -125,7 +125,9 @@ lp.bye,Good Bye,さようなら
 ```
 
 ### Text
-One word or sentence per line. Keys are numbered (`prefix_1`, `prefix_2`, …).
+One word or sentence per line. Each line becomes a key named after its line number
+(`prefix_1`, `prefix_2`, …), so the same line in another language's file lands on the same key.
+Blank lines are skipped.
 
 ---
 

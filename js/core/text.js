@@ -142,6 +142,7 @@
     const flags = o.matchCase ? "g" : "gi";
     const re = new RegExp(escapeRegExp(needle), flags);
     return {
+      needle,
       count(s) {
         if (!needle) return 0;
         const m = String(s).match(re);

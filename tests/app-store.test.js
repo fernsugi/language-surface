@@ -287,3 +287,114 @@ test("an undo token only undoes the change it was issued for", async () => {
   assert.equal(store.getValue("k", "en"), "three");
   assert.equal(store.undoIfLatest(null), null);
 });
+
+test("values can only be set for languages the project has", async () => {
+  await store.init();
+  store.createProject({ name: "Langs", languages: ["en", "fr"], entries: { k: { en: "one" } } });
+  assert.equal(store.setValue("k", "de", "eins"), false);
+  assert.equal(store.setValue("k", "__proto__", "x"), false);
+  assert.equal(store.setValues([{ key: "k", lang: "de", value: "eins" }]), false);
+  assert.deepEqual(plain(store.project().entries.k), { en: "one" });
+  assert.ok(store.setValues([{ key: "k", lang: "de", value: "eins" }, { key: "k", lang: "fr", value: "un" }]));
+  assert.deepEqual(plain(store.project().entries.k), { en: "one", fr: "un" });
+});
+
+/* ---- Saving ----------------------------------------------------------------------------- */
+
+/** Replace the storage layer's save() with one the test resolves by hand. */
+function fakeSaves() {
+  const real = LS.db.save;
+  const saves = [];
+  LS.db.save = (patch) =>
+    new Promise((resolve, reject) => {
+      saves.push({ projects: plain(patch.projects), deleted: patch.deleted.slice(), ui: patch.ui !== undefined, settings: patch.settings !== undefined, resolve, reject });
+    });
+  return { saves, restore: () => (LS.db.save = real) };
+}
+
+test("a save requested with { now: true } does not queue behind a running save", async () => {
+  await store.init();
+  await store.flush(true);
+  const fake = fakeSaves();
+  try {
+    const p = store.createProject({ name: "Saving", languages: ["en", "fr"], entries: { a: { en: "A" }, b: { en: "B" } } });
+    const first = store.flush();
+    assert.equal(fake.saves.length, 1, "the write is issued within the call");
+    assert.equal(fake.saves[0].projects[0].id, p.id);
+    assert.equal(store.saveStatus, "saving");
+
+    store.setValue("a", "fr", "late edit");
+    store.flush();
+    assert.equal(fake.saves.length, 1, "an ordinary save waits for the running one");
+
+    const second = store.flush({ now: true });
+    assert.equal(fake.saves.length, 2, "…but a page that is closing does not");
+    assert.equal(fake.saves[1].projects[0].entries.a.fr, "late edit");
+
+    store.flush({ now: true });
+    assert.equal(fake.saves.length, 2, "nothing is written when nothing changed");
+
+    fake.saves[0].resolve();
+    await first;
+    assert.equal(store.saveStatus, "saving", "still waiting for the second save");
+    fake.saves[1].resolve();
+    await second;
+    assert.equal(store.saveStatus, "saved");
+    assert.equal(store.hasPendingChanges(), false);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("flush(true) keeps going until everything is written", async () => {
+  await store.init();
+  const fake = fakeSaves();
+  try {
+    store.createProject({ name: "Drain", languages: ["en"], entries: { a: { en: "A" } } });
+    const done = store.flush(true);
+    assert.equal(fake.saves.length, 1);
+    store.setValue("a", "en", "changed while saving");
+    fake.saves[0].resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(fake.saves.length, 2, "the change made meanwhile gets its own save");
+    assert.equal(fake.saves[1].projects[0].entries.a.en, "changed while saving");
+    fake.saves[1].resolve();
+    await done;
+    assert.equal(store.saveStatus, "saved");
+  } finally {
+    fake.restore();
+  }
+});
+
+test("a failed save keeps the changes pending and the next save retries them", async () => {
+  await store.init();
+  await store.flush(true);
+  const fake = fakeSaves();
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    const p = store.createProject({ name: "Retry", languages: ["en"], entries: { a: { en: "A" } } });
+    const removed = store.deleteProject(store.createProject({ name: "Doomed" }).id);
+    assert.ok(removed);
+    store.selectProject(p.id);
+    const attempt = store.flush();
+    assert.deepEqual(fake.saves[0].deleted, [removed.project.id]);
+    fake.saves[0].reject(new Error("quota exceeded"));
+    await attempt;
+    assert.equal(store.saveStatus, "error");
+    assert.equal(store.hasPendingChanges(), true);
+
+    const retry = store.flush();
+    assert.equal(fake.saves.length, 2);
+    assert.deepEqual(fake.saves[1].projects.map((x) => x.id), [p.id]);
+    assert.deepEqual(fake.saves[1].deleted, [removed.project.id]);
+    assert.equal(fake.saves[1].ui, true);
+    fake.saves[1].resolve();
+    await retry;
+    assert.equal(store.saveStatus, "saved");
+    assert.equal(store.hasPendingChanges(), false);
+  } finally {
+    console.error = realError;
+    fake.restore();
+  }
+});

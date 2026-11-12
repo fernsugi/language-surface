@@ -19,10 +19,20 @@
   let current = null; // { name, instance }
   const nsOpen = new Map(); // projectId -> Set of expanded namespace paths
 
-  /** Collects listeners so a view can release everything with one call. */
+  /**
+   * Collects listeners so a view can release everything with one call, and remembers which
+   * project the view was opened for: `alive()` turns false once another project is current, so
+   * late blur handlers and timers can never write one project's text into another.
+   */
   function scope() {
     const disposers = [];
+    const projectId = store.project() ? store.project().id : null;
     return {
+      projectId,
+      alive() {
+        const p = store.project();
+        return !!p && p.id === projectId;
+      },
       on(type, fn) {
         disposers.push(store.on(type, fn));
       },
@@ -102,13 +112,38 @@
       updateSidebar();
       return;
     }
-    if (current && current.instance && current.instance.destroy) current.instance.destroy();
-    overlay.closeAll();
-    LS.dom.clear(viewEl);
+    teardown();
     root.dataset.view = name;
     const view = LS.views[name];
     current = { name, instance: view.mount(viewEl, route.params) || null };
     updateSidebar();
+  }
+
+  /** Close the current view, letting it save what the user was in the middle of. */
+  function teardown() {
+    const instance = current && current.instance;
+    current = null;
+    if (instance && instance.destroy) {
+      try {
+        instance.destroy();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    overlay.closeAll();
+    if (viewEl) LS.dom.clear(viewEl);
+  }
+
+  /** Commit whatever is being typed (open cell editor, details panel, instructions box). */
+  function flushView() {
+    const instance = current && current.instance;
+    if (instance && instance.flush) {
+      try {
+        instance.flush();
+      } catch (e) {
+        console.error(e);
+      }
+    }
   }
 
   /* ---- Sidebar ------------------------------------------------------------------- */
@@ -477,7 +512,7 @@
   /* ---- Global events ------------------------------------------------------------------ */
 
   function onKeydown(e) {
-    if (e.defaultPrevented || e.isComposing) return;
+    if (e.defaultPrevented || LS.dom.isIME(e)) return;
     const { matchKey, isEditable } = LS.dom;
     const dialogOpen = !!document.querySelector("dialog[open]");
     if (matchKey(e, "mod+k")) {
@@ -578,6 +613,9 @@
       if (d.path === "theme" || d.path === "*") applyTheme();
       refreshSidebarSoon();
     });
+    // The view is closed while its own project is still the current one, so anything it
+    // saves on the way out lands in the right project.
+    store.on("before-project-change", () => teardown());
     store.on("projects", (d) => {
       if (d.reason === "meta") return updateSidebar();
       renderView(true);
@@ -601,13 +639,23 @@
 
     window.addEventListener("hashchange", () => renderView());
     document.addEventListener("keydown", onKeydown);
+    // The page is being hidden or closed, which may be the last chance to save: take what is
+    // being typed (editors stay open) and hand everything to storage right away.
+    const saveNow = () => {
+      flushView();
+      store.flush({ now: true });
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") saveNow();
+    });
+    window.addEventListener("pagehide", saveNow);
     window.addEventListener("beforeunload", (e) => {
-      if (store.hasPendingChanges()) {
-        store.flush();
-        if (store.saveStatus === "error") {
-          e.preventDefault();
-          e.returnValue = "";
-        }
+      // If the last save failed, ask before leaving (the save below is tried again regardless).
+      const failed = store.saveStatus === "error" && store.hasPendingChanges();
+      saveNow();
+      if (failed) {
+        e.preventDefault();
+        e.returnValue = "";
       }
     });
     initDragAndDrop();

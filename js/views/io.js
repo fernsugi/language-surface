@@ -60,8 +60,10 @@
         } catch (e) {
           source = { id: util.uid("src"), name: file.name, size: file.size, format: "text", kind: "", error: (e && e.message) || "Could not read this file.", notes: [], keyCount: 0 };
         }
-        // The same file dropped twice replaces the earlier copy.
-        state.sources = state.sources.filter((s) => s.name !== source.name);
+        // The same file dropped twice replaces the earlier copy; different files that merely
+        // share a name (en/common.json, ja/common.json) are both kept.
+        source.identity = file.name + "|" + file.size + "|" + (file.lastModified || 0);
+        state.sources = state.sources.filter((s) => s.identity !== source.identity);
         state.sources.push(source);
         state.reading--;
       }

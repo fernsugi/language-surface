@@ -172,6 +172,21 @@
     return String(e.key).toLowerCase() === key;
   }
 
+  /**
+   * True while an input method (Japanese, Chinese, Korean …) is composing text. The Enter that
+   * confirms a composition must never trigger "submit"; Safari reports it with keyCode 229 only.
+   */
+  function isIME(e) {
+    return !!e.isComposing || e.keyCode === 229;
+  }
+
+  /** Compare text ignoring the line-ending style (textareas always report "\n"). */
+  function sameText(a, b) {
+    if (a === b) return true;
+    const norm = (v) => String(v == null ? "" : v).replace(/\r\n?/g, "\n");
+    return norm(a) === norm(b);
+  }
+
   function isEditable(el) {
     if (!el) return false;
     const tag = el.tagName;
@@ -294,12 +309,20 @@
     };
     root.value = o.value;
     root.setValue = (v) => {
+      if (v === root.value) return;
       root.value = v;
       render(v);
     };
+    // Counts change often (after every edit). Update them in place: replacing the buttons while
+    // the pointer is down on one of them would swallow the click.
     root.setOptions = (options) => {
+      const same = options.length === o.options.length && options.every((x, i) => x.value === o.options[i].value && x.label === o.options[i].label && x.icon === o.options[i].icon);
       o.options = options;
-      render(root.value);
+      if (!same) return render(root.value);
+      Array.from(root.children).forEach((btn, i) => {
+        const count = btn.querySelector(".segmented-count");
+        if (count && options[i].count != null && count.textContent !== String(options[i].count)) count.textContent = String(options[i].count);
+      });
     };
     root.addEventListener("keydown", (e) => {
       if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
@@ -381,6 +404,6 @@
   }
 
   LS.h = h;
-  LS.dom = { h, clear, replaceChildren, delegate, focusables, autosize, copyText, download, shortcut, matchKey, isEditable };
+  LS.dom = { h, clear, replaceChildren, delegate, focusables, autosize, copyText, download, shortcut, matchKey, isEditable, isIME, sameText };
   LS.ui = { button, setBusy, kbd, langTag, toggle, checkbox, segmented, select, field, setFieldError, meter, emptyState, spinner };
 })(globalThis.LS || (globalThis.LS = {}));

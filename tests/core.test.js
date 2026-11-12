@@ -104,14 +104,29 @@ test("keys.nest builds nested objects and arrays", () => {
   assert.deepEqual(conflicts, []);
 });
 
-test("keys.nest reports value/namespace conflicts instead of losing data", () => {
-  const a = LS.keys.nest({ menu: "Menu", "menu.title": "Title" });
+test("keys.nest keeps a key that is also a namespace, whatever the key order", () => {
+  const a = LS.keys.nest({ menu: "Menu", "menu.title": "Title", "menu.items": "Items" });
   assert.deepEqual(plain(a.tree), { menu: "Menu" });
-  assert.deepEqual(a.conflicts, ["menu.title"]);
-  const b = LS.keys.nest({ "menu.title": "Title", menu: "Menu" });
-  assert.deepEqual(plain(b.tree), { menu: { title: "Title" } });
-  assert.deepEqual(b.conflicts, ["menu"]);
+  assert.deepEqual(a.conflicts, ["menu.title", "menu.items"]);
+  // Same keys, namespace members first: the result must be identical.
+  const b = LS.keys.nest({ "menu.title": "Title", "menu.items": "Items", menu: "Menu" });
+  assert.deepEqual(plain(b.tree), { menu: "Menu" });
+  assert.deepEqual(b.conflicts.sort(), ["menu.items", "menu.title"]);
   assert.deepEqual(LS.keys.nestingConflicts(["a", "a.b", "c"]), ["a.b"]);
+  assert.deepEqual(LS.keys.nestingConflicts(["a[0]", "a[1]", "a"]).sort(), ["a[0]", "a[1]"]);
+  assert.deepEqual(LS.keys.nestingConflicts(["a.b.c", "a.b", "a"]).sort(), ["a.b", "a.b.c"]);
+});
+
+test("keys.nest never renames or drops keys with empty segments", () => {
+  const { tree, conflicts } = LS.keys.nest({ "Loading...": 1, "Saved.": 2, "...": 3, ".x": 4, "": 5, ok: 6, "a..b": 7 });
+  assert.deepEqual(plain(tree), { ok: 6 });
+  assert.deepEqual(conflicts.sort(), ["", "...", ".x", "Loading...", "Saved.", "a..b"]);
+});
+
+test("keys.nest reports a second key that resolves to the same path", () => {
+  const { tree, conflicts } = LS.keys.nest({ "list[0]": "a", "list[00]": "b" });
+  assert.deepEqual(plain(tree), { list: ["a"] });
+  assert.deepEqual(conflicts, ["list[00]"]);
 });
 
 test("keys.nest keeps object leaves (language maps) intact and is prototype-safe", () => {
@@ -155,6 +170,18 @@ test("csv.parse strips BOM and detects delimiters", () => {
   assert.deepEqual(LS.csv.parse("﻿key;en;de\na;Hello;Hallo").rows, [["key", "en", "de"], ["a", "Hello", "Hallo"]]);
   assert.equal(LS.csv.parse("key\ten\na\tb").delimiter, "\t");
   assert.equal(LS.csv.parse('key,en\n"a;b",c').delimiter, ",");
+});
+
+test("csv.parse treats quotes inside unquoted fields as text", () => {
+  const { rows } = LS.csv.parse('key,en,ja\nhint,Click "OK" to continue,OK\nsize,5" screen,5インチ\nnext,after,後\nlead, "spaced, quoted",x\nq,"a ""b"" c",y');
+  assert.deepEqual(rows, [
+    ["key", "en", "ja"],
+    ["hint", 'Click "OK" to continue', "OK"],
+    ["size", '5" screen', "5インチ"],
+    ["next", "after", "後"],
+    ["lead", "spaced, quoted", "x"],
+    ["q", 'a "b" c', "y"],
+  ]);
 });
 
 test("csv.stringify round-trips through parse", () => {

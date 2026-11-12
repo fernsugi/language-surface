@@ -162,7 +162,7 @@
     };
     const commitTitle = () => {
       const p = store.project();
-      if (!p) return;
+      if (!p || !sc.alive()) return;
       const next = titleInput.value.trim();
       if (!next) titleInput.value = p.name;
       else if (next !== p.name) store.renameProject(next);
@@ -172,7 +172,7 @@
     titleInput.addEventListener("blur", commitTitle);
     titleInput.addEventListener("input", fitTitle);
     titleInput.addEventListener("keydown", (e) => {
-      if (e.isComposing) return;
+      if (LS.dom.isIME(e)) return;
       if (e.key === "Enter") {
         e.preventDefault();
         titleInput.blur();
@@ -246,7 +246,7 @@
       applySearch();
     });
     searchInput.addEventListener("keydown", (e) => {
-      if (e.isComposing) return;
+      if (LS.dom.isIME(e)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         if (searchInput.value) setSearch("");
@@ -363,7 +363,9 @@
       getIssues,
       getFinder,
       isBusy: (key, lang) => LS.translator.isBusy(key, lang),
-      onCommit: (key, lang, value) => store.setValue(key, lang, value),
+      onCommit: (key, lang, value) => {
+        if (sc.alive()) store.setValue(key, lang, value);
+      },
       onActiveChange: (a) => {
         if (inspectorOpen) inspector.show(a.key);
         syncStatus();
@@ -386,6 +388,7 @@
     /* ---- Inspector ----------------------------------------------------------------------- */
 
     const inspector = LS.createInspector({
+      isAlive: () => sc.alive(),
       onClose: () => setInspector(false),
       onFocusGrid: () => grid.focus(),
       onNavigate: (delta, lang) => {
@@ -417,8 +420,12 @@
       inspectorBtn.setAttribute("aria-pressed", String(inspectorOpen));
       inspectorBtn.classList.toggle("active", inspectorOpen);
       if (window.innerWidth > WIDE) store.setUI({ inspectorOpen });
-      if (inspectorOpen) inspector.show(grid.getActive().key);
-      else inspector.flush();
+      if (inspectorOpen) {
+        // The panel is not kept in sync while hidden: rebuild it from the store.
+        const activeKey = grid.getActive().key;
+        if (inspector.key === activeKey) inspector.refresh();
+        else inspector.show(activeKey);
+      } else inspector.flush();
     }
 
     /* ---- Bulk bar & status bar ------------------------------------------------------------- */
@@ -684,7 +691,7 @@
       });
       for (const input of [keyInput, textInput]) {
         input.addEventListener("keydown", (e) => {
-          if (e.isComposing) return;
+          if (LS.dom.isIME(e)) return;
           if (e.key === "Enter" && (input === keyInput || e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             form.requestSubmit();
@@ -770,7 +777,9 @@
 
     sc.on("entries", (d) => {
       if (d.kind === "cell") {
-        grid.refreshKey(d.key);
+        // In place, never by replacing nodes: this often runs between mousedown and mouseup
+        // (an edit committing on blur), and replaced nodes would swallow that click.
+        grid.refreshRowValues(d.key);
         grid.refreshFigures();
         inspector.updateCell(d.key, d.lang);
         countIssuesSoon();
@@ -846,6 +855,12 @@
         if (next && next.key) reveal(next.key);
       },
       addKey: openAddKey,
+      /** Save anything being typed (open cell editor, details panel, title) without closing it. */
+      flush() {
+        grid.saveEdit();
+        inspector.flush();
+        if (document.activeElement === titleInput) commitTitle();
+      },
       scope: () => ({ keys: rows.slice(), filtered: isFiltered() }),
       focusSearch() {
         searchInput.focus();

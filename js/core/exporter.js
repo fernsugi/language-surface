@@ -41,10 +41,16 @@
     return JSON.stringify(value, null, 2) + "\n";
   }
 
-  /** Nest a flat map; keys that collide with a namespace are kept at the root under their flat name. */
+  /**
+   * Nest a flat map. Keys that cannot be nested (see keys.nest) are kept at the top level under
+   * their full name, so every key is always written exactly once and files re-import unchanged.
+   */
   function structure(flat, nested, hole) {
     if (!nested) return { tree: flat, conflicts: [] };
     const { tree, conflicts } = LS.keys.nest(flat, { hole });
+    if (!conflicts.length) return { tree, conflicts };
+    // Named keys cannot be attached to an array root; fall back to a fully flat file.
+    if (Array.isArray(tree)) return { tree: flat, conflicts };
     for (const key of conflicts) tree[key] = flat[key];
     return { tree, conflicts };
   }

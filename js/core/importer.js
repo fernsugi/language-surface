@@ -93,55 +93,70 @@
     }
   }
 
-  /** {lp:{hello:{en:"Hello"}}} -> {"lp.hello": {en:"Hello"}}; counts values outside any language map. */
+  /**
+   * Find language maps ({en: "…", ja: "…"}) anywhere in a document, arrays included.
+   * {lp:{hello:{en:"Hello"}}} -> {"lp.hello": {en:"Hello"}}
+   * Also counts the plain values that are not inside any language map.
+   */
   function collectLangMaps(obj) {
-    const out = Object.create(null);
+    const candidates = [];
     let skipped = 0;
+    const join = (path, k) => (path ? path + "." + k : k);
+    function countPrimitives(node) {
+      if (isPrimitive(node)) return 1;
+      if (!node || typeof node !== "object") return 0;
+      let n = 0;
+      for (const k of Object.keys(node)) n += countPrimitives(node[k]);
+      return n;
+    }
     function walk(node, path) {
-      if (!isPlainObject(node)) {
-        if (isPrimitive(node) && path) skipped++;
+      if (isPrimitive(node)) {
+        if (path) skipped++;
+        return;
+      }
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) walk(node[i], path + "[" + i + "]");
         return;
       }
       const keys = Object.keys(node);
       if (path && keys.length && langs.looksLikeLangMapKeys(keys) && keys.every((k) => isPrimitive(node[k]))) {
-        out[path] = node;
+        candidates.push({ path, node, keys });
         return;
       }
-      for (const k of keys) walk(node[k], path ? path + "." + k : k);
+      for (const k of keys) walk(node[k], join(path, k));
     }
     walk(obj, "");
-    return { maps: out, skipped };
+
+    // Short words such as {yes, no} or {am, pm} look like language codes too. Real language maps
+    // repeat the same languages throughout a file, so keep a candidate only when it consists of
+    // known languages or shares a language with the bulk of the other candidates.
+    const freq = new Map();
+    for (const c of candidates) for (const k of c.keys) freq.set(langs.normalize(k), (freq.get(langs.normalize(k)) || 0) + 1);
+    const common = new Set();
+    for (const [code, n] of freq) if (candidates.length >= 2 && n / candidates.length >= 0.5) common.add(code);
+    const maps = Object.create(null);
+    let mapCount = 0;
+    for (const c of candidates) {
+      const codes = c.keys.map(langs.normalize);
+      const allKnown = c.keys.every((k) => langs.looksLikeKnownLangBase(k));
+      if (allKnown || codes.some((code) => common.has(code))) {
+        maps[c.path] = c.node;
+        mapCount++;
+      } else skipped += countPrimitives(c.node);
+    }
+    return { maps, skipped, mapCount, candidates: candidates.length };
   }
 
-  /** Flatten nested JSON to dotted keys with primitive leaves; arrays become key[0], key[1], … */
-  function flattenValues(obj, lang, fallbackLang) {
+  /** Flatten nested JSON to dotted keys with primitive leaves; arrays become key[0], key[1], … Nothing is dropped. */
+  function flattenValues(obj) {
     const out = Object.create(null);
-    const wanted = langs.normalize(lang);
-    const fallback = langs.normalize(fallbackLang || "en");
-
-    // A nested {en:"…", ja:"…"} object inside a single-language file: pick the best value.
-    function pickFromLangMap(node) {
-      if (!isPlainObject(node)) return undefined;
-      const keys = Object.keys(node);
-      if (!langs.looksLikeLangMapKeys(keys) || !keys.every((k) => isPrimitive(node[k]))) return undefined;
-      const byCode = Object.create(null);
-      for (const k of keys) byCode[langs.normalize(k)] = node[k];
-      if (wanted && wanted in byCode) return byCode[wanted];
-      if (fallback && fallback in byCode) return byCode[fallback];
-      return node[keys[0]];
-    }
-
     function walk(node, path) {
       if (isPrimitive(node)) {
         if (path) out[path] = node;
         return;
       }
       if (typeof node !== "object") return;
-      const picked = pickFromLangMap(node);
-      if (picked !== undefined) {
-        if (path) out[path] = picked;
-        return;
-      }
       if (Array.isArray(node)) {
         for (let i = 0; i < node.length; i++) walk(node[i], path + "[" + i + "]");
         return;
@@ -155,6 +170,8 @@
   function entriesFromLangMaps(maps) {
     const entries = Object.create(null);
     const order = [];
+    const freq = Object.create(null);
+    let count = 0;
     for (const rawKey of Object.keys(maps)) {
       const key = normalizeKey(rawKey);
       if (!validKey(key)) continue;
@@ -164,18 +181,24 @@
       for (const rawLang of Object.keys(map)) {
         const lang = langs.normalize(rawLang);
         if (!lang) continue;
-        entry[lang] = toText(map[rawLang]);
+        const value = toText(map[rawLang]);
+        // A second map for the same key never erases text with an empty value.
+        if (value !== "" || typeof entry[lang] !== "string") entry[lang] = value;
         if (!order.includes(lang)) order.push(lang);
+        freq[lang] = (freq[lang] || 0) + 1;
         any = true;
       }
-      if (any) entries[key] = entry;
+      if (any) {
+        entries[key] = entry;
+        count++;
+      }
     }
-    return { entries, langs: order };
+    return { entries, langs: order, freq, mapCount: count };
   }
 
   /** Key-first maps: { "a.b": {en, ja} } or nested with language maps at the leaves. */
   function detectKeyFirst(data) {
-    if (!isPlainObject(data)) return null;
+    if (!data || typeof data !== "object") return null;
     const { maps, skipped } = collectLangMaps(data);
     const res = entriesFromLangMaps(maps);
     if (!Object.keys(res.entries).length || !res.langs.length) return null;
@@ -184,14 +207,19 @@
   }
 
   /** Language-first maps: { en: {…}, ja: {…} } whose sub-trees share most of their keys. */
-  function detectLangFirst(data) {
+  function detectLangFirst(data, fileLang) {
     if (!isPlainObject(data)) return null;
     const rootKeys = Object.keys(data);
     if (rootKeys.length < 2 || !langs.looksLikeLangMapKeys(rootKeys)) return null;
     if (!rootKeys.every((k) => isPlainObject(data[k]))) return null;
-    const flats = rootKeys.map((k) => flattenValues(data[k], k, k));
+    const known = knownRatio(rootKeys);
+    if (known < 0.5) return null;
+    // A file named after one language whose top level does not even contain that language is
+    // far more likely a single-language file with short namespaces ({am: …, pm: …}).
+    if (fileLang && !rootKeys.some((k) => langs.normalize(k) === fileLang) && known < 1) return null;
+    const flats = rootKeys.map((k) => flattenValues(data[k]));
     const sizes = flats.map((f) => Object.keys(f).length);
-    if (sizes.some((s) => s === 0)) return null;
+    if (sizes.some((n) => n === 0)) return null;
     // Structural similarity between the first language and each other one.
     const first = flats[0];
     let overlapSum = 0;
@@ -214,7 +242,7 @@
         (entries[key] || (entries[key] = Object.create(null)))[lang] = toText(flats[i][rawKey]);
       }
     });
-    return { entries, langs: order, skipped: 0 };
+    return { entries, langs: order, skipped: 0, mapCount: Object.keys(entries).length, freq: null };
   }
 
   function knownRatio(keys) {
@@ -222,10 +250,10 @@
     return keys.filter((k) => langs.looksLikeKnownLangBase(k)).length / keys.length;
   }
 
-  /** Decide how a parsed JSON document maps to translations. */
-  function detectMulti(data) {
+  /** The multi-language reading of a parsed JSON document, or null when there is none. */
+  function detectMulti(data, fileLang) {
     const keyFirst = detectKeyFirst(data);
-    const langFirst = detectLangFirst(data);
+    const langFirst = detectLangFirst(data, fileLang);
     if (keyFirst && langFirst) {
       // Ambiguous (both levels look like languages): prefer the level with more real language codes.
       const outer = knownRatio(Object.keys(data));
@@ -237,7 +265,28 @@
     return null;
   }
 
-  /** Single-language reading of a JSON document. */
+  /**
+   * Should a JSON file that can be read both ways default to "several languages"?
+   * Wrong guesses here used to hide real strings, so the bar is deliberately high: the file has
+   * to look like a translation map throughout, not merely contain something map-shaped.
+   */
+  function preferMulti(multi, single, fileLang) {
+    if (!multi) return false;
+    if (!single) return true;
+    if (multi.layout === "lang-first") return true;
+    const mapped = Object.keys(multi.entries).length;
+    if (multi.skipped > mapped) return false;
+    const allKnown = multi.langs.every((l) => langs.looksLikeKnownLangBase(l));
+    if (fileLang) return allKnown && multi.mapCount >= 2 && multi.skipped === 0;
+    if (allKnown) return true;
+    let dominant = 0;
+    for (const l of multi.langs) {
+      if (langs.looksLikeKnownLangBase(l)) dominant = Math.max(dominant, (multi.freq[l] || 0) / multi.mapCount);
+    }
+    return multi.mapCount >= 2 && dominant >= 0.6;
+  }
+
+  /** Single-language reading of a JSON document: every string, flattened. */
   function detectSingle(data, fileName, defaultLang) {
     let obj = data;
     let lang = langs.inferFromFileName(fileName);
@@ -254,12 +303,13 @@
         }
       }
     }
-    const flat = flattenValues(obj, lang || defaultLang, defaultLang);
+    const flat = flattenValues(obj);
     const values = Object.create(null);
     for (const rawKey of Object.keys(flat)) {
       const key = normalizeKey(rawKey);
       if (validKey(key)) values[key] = toText(flat[rawKey]);
     }
+    void defaultLang;
     return { values, lang, langSource };
   }
 
@@ -327,7 +377,7 @@
         if (header[c]) source.notes.push('Column "' + header[c] + '" is not a usable language code and was skipped.');
         continue;
       }
-      if (order.includes(lang)) source.notes.push("Column " + lang.toUpperCase() + " appears more than once; the last one wins.");
+      if (order.includes(lang)) source.notes.push("Column " + lang.toUpperCase() + " appears more than once; filled cells from the later column win.");
       else order.push(lang);
     }
     if (!order.length) throw new Error("CSV has no language columns (expected a header like: key,en,ja).");
@@ -335,16 +385,28 @@
       source.notes.push('Using the first column ("' + (header[0] || "unnamed") + '") as the key.');
     }
     const entries = Object.create(null);
+    let noKey = 0;
+    let repeated = 0;
     for (let r = 1; r < rows.length; r++) {
       const row = rows[r];
       const key = normalizeKey(row[0]);
-      if (!validKey(key)) continue;
-      const entry = entries[key] || (entries[key] = Object.create(null));
+      if (!validKey(key)) {
+        noKey++;
+        continue;
+      }
+      let entry = entries[key];
+      if (entry) repeated++;
+      else entry = entries[key] = Object.create(null);
       for (let c = 1; c < header.length; c++) {
         const lang = cols[c - 1];
-        if (lang) entry[lang] = toText(row[c]);
+        if (!lang) continue;
+        const value = toText(row[c]);
+        // When a key or column repeats, an empty cell never erases text found earlier.
+        if (value !== "" || typeof entry[lang] !== "string") entry[lang] = value;
       }
     }
+    if (noKey) source.notes.push(LS.util.plural(noKey, "row") + " without a key " + (noKey === 1 ? "was" : "were") + " skipped.");
+    if (repeated) source.notes.push(LS.util.plural(repeated, "row") + " repeat" + (repeated === 1 ? "s" : "") + " an earlier key; their filled cells were merged into it.");
     source.kind = "multi";
     source.layout = "csv";
     source.delimiter = delimiter;
@@ -357,12 +419,13 @@
   function analyzeJSON(source, text, defaultLang) {
     const data = parseJSON(text, source.name);
     if (!data || typeof data !== "object") throw new Error("JSON root must be an object.");
-    const multi = detectMulti(data);
     const single = detectSingle(data, source.name, defaultLang);
+    const fileLang = single.langSource === "filename" ? single.lang : "";
+    const multi = detectMulti(data, fileLang);
     source.multi = multi;
     source.single = Object.keys(single.values).length ? single : null;
     if (!multi && !source.single) throw new Error("No translatable strings found in this JSON file.");
-    setJSONKind(source, multi ? "multi" : "single", defaultLang);
+    setJSONKind(source, preferMulti(multi, source.single, fileLang) ? "multi" : "single", defaultLang);
   }
 
   /** Apply (or switch) the interpretation of a JSON source: "multi" | "single". */
@@ -375,7 +438,12 @@
       source.entries = source.multi.entries;
       source.keyCount = Object.keys(source.entries).length;
       source.notes = source.multi.skipped
-        ? [LS.util.plural(source.multi.skipped, "value") + " outside a language map " + (source.multi.skipped === 1 ? "was" : "were") + " skipped."]
+        ? [
+            LS.util.plural(source.multi.skipped, "value") +
+              " " +
+              (source.multi.skipped === 1 ? "is" : "are") +
+              " not inside a language map and will not be imported. Read the file as one language to keep everything.",
+          ]
         : [];
     } else if (source.single) {
       source.kind = "single";
@@ -392,19 +460,34 @@
   }
 
   function analyzeText(source, text, defaultLang) {
-    const lines = LS.util.stripBom(text)
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    if (!lines.length) throw new Error("The file is empty.");
+    // Keys follow line numbers, so that en.txt and ja.txt stay aligned even when one of them
+    // has an empty line. Blank lines themselves produce no key.
+    const raw = LS.util.stripBom(text).split(/\r\n|\r|\n/);
+    const items = [];
+    let blanksInside = 0;
+    let pendingBlanks = 0;
+    raw.forEach((line, i) => {
+      const value = line.trim();
+      if (!value) {
+        pendingBlanks++;
+        return;
+      }
+      if (items.length) blanksInside += pendingBlanks;
+      pendingBlanks = 0;
+      items.push({ n: i + 1, text: value });
+    });
+    if (!items.length) throw new Error("The file is empty.");
+    const fileLang = langs.inferFromFileName(source.name);
     source.format = "text";
     source.kind = "lines";
     source.layout = "lines";
-    source.lines = lines;
-    source.lang = defaultLang;
-    source.langSource = "default";
+    source.items = items;
+    source.lines = items.map((it) => it.text);
+    source.lang = fileLang || defaultLang;
+    source.langSource = fileLang ? "filename" : "default";
     source.prefix = "";
-    source.keyCount = lines.length;
+    source.keyCount = items.length;
+    if (blanksInside) source.notes.push(LS.util.plural(blanksInside, "empty line") + " skipped. Keys follow line numbers, so files for other languages stay aligned.");
   }
 
   /** Key used for line `index` (0-based) of a text import. */
@@ -427,7 +510,9 @@
       if (l && !order.includes(l)) order.push(l);
     };
     const put = (key, lang, value) => {
-      (entries[key] || (entries[key] = Object.create(null)))[lang] = value;
+      const entry = entries[key] || (entries[key] = Object.create(null));
+      // Across several files, an empty value never erases text another file provided.
+      if (value !== "" || typeof entry[lang] !== "string") entry[lang] = value;
     };
 
     for (const src of sources) {
@@ -449,10 +534,10 @@
         if (src.kind === "single") {
           for (const key of Object.keys(src.values)) put(key, lang, src.values[key]);
         } else {
-          src.lines.forEach((line, i) => {
-            const key = lineKey(src.prefix, i);
-            if (validKey(key)) put(key, lang, line);
-          });
+          for (const item of src.items) {
+            const key = lineKey(src.prefix, item.n - 1);
+            if (validKey(key)) put(key, lang, item.text);
+          }
         }
       }
     }
@@ -524,6 +609,7 @@
     // exposed for tests
     detectMulti,
     detectSingle,
+    preferMulti,
     flattenValues,
   };
 })(globalThis.LS || (globalThis.LS = {}));

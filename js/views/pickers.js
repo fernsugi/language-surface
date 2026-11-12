@@ -125,7 +125,7 @@
 
     input.addEventListener("input", render);
     input.addEventListener("keydown", (e) => {
-      if (e.isComposing) return;
+      if (LS.dom.isIME(e)) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         move(1);

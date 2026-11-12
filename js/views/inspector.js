@@ -9,7 +9,8 @@
   /**
    * @param {Object} o
    *   onClose(), onNavigate(delta), onRenamed(oldKey, newKey), onDelete(key), onDuplicate(key),
-   *   onTranslate(key, langs[]), getPosition(key) -> {index, total}, getIssues(key, lang) -> []
+   *   onTranslate(key, langs[]), getPosition(key) -> {index, total},
+   *   isAlive() -> false once the panel's project is no longer the current one
    */
   function createInspector(o) {
     const el = h("aside.inspector", { "aria-label": "Key details" });
@@ -18,14 +19,25 @@
     const timers = new Map(); // lang -> debounce timer
     let keyInput = null;
 
+    const alive = () => !o.isAlive || o.isAlive();
+
+    /**
+     * Save a field. `f.base` is the text the field last had in common with the store, so a field
+     * is written only when the user really changed it — never because the store moved on
+     * underneath it (undo, find & replace, another tab, an AI result).
+     */
     function commitField(lang, immediate) {
       const f = fields.get(lang);
       if (!f || key == null) return;
       clearTimeout(timers.get(lang));
+      const forKey = key;
       const run = () => {
         timers.delete(lang);
-        if (key == null || !store.hasKey(key)) return;
-        if (f.ta.value !== store.getValue(key, lang)) store.setValue(key, lang, f.ta.value, { coalesce: true });
+        if (!alive() || key !== forKey || fields.get(lang) !== f || !store.hasKey(forKey)) return;
+        if (LS.dom.sameText(f.ta.value, f.base)) return;
+        const value = f.ta.value;
+        store.setValue(forKey, lang, value, { coalesce: true });
+        f.base = value;
       };
       if (immediate) run();
       else timers.set(lang, setTimeout(run, 450));
@@ -104,7 +116,7 @@
       });
       ta.addEventListener("blur", () => commitField(lang, true));
       ta.addEventListener("keydown", (e) => {
-        if (e.isComposing) return;
+        if (LS.dom.isIME(e)) return;
         if (e.key === "Escape") {
           e.preventDefault();
           ta.blur();
@@ -124,7 +136,7 @@
         ta,
         issues
       );
-      fields.set(lang, { root, ta, count, issues });
+      fields.set(lang, { root, ta, count, issues, base: store.getValue(key, lang) });
       return root;
     }
 
@@ -151,7 +163,7 @@
       keyInput = input;
       const shownKey = key;
       const applyRename = () => {
-        if (key !== shownKey || !input.isConnected) return true;
+        if (key !== shownKey || !input.isConnected || !alive()) return true;
         const next = input.value;
         if (LS.keys.normalizeKey(next) === shownKey) {
           input.value = shownKey;
@@ -169,7 +181,7 @@
         return true;
       };
       input.addEventListener("keydown", (e) => {
-        if (e.isComposing) return;
+        if (LS.dom.isIME(e)) return;
         if (e.key === "Enter") {
           e.preventDefault();
           if (applyRename() && input.isConnected) input.blur();
@@ -291,12 +303,16 @@
         if (changedKey !== key) return;
         const p = store.project();
         const f = fields.get(lang);
-        if (f && document.activeElement !== f.ta) {
+        if (f) {
           const value = store.getValue(key, lang);
-          if (f.ta.value !== value) {
+          // Follow the store unless the user has typed something here that is not saved yet —
+          // even when the field has focus (e.g. an AI result arriving for the field in use).
+          const untouched = LS.dom.sameText(f.ta.value, f.base);
+          if (untouched && !LS.dom.sameText(f.ta.value, value)) {
             f.ta.value = value;
             LS.dom.autosize(f.ta);
           }
+          f.base = value;
         }
         // Source text affects every language's checks; other cells only their own.
         if (p && lang === p.sourceLang) for (const l of fields.keys()) updateFieldMeta(l);

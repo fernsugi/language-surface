@@ -261,3 +261,48 @@ test("defaultView limits very wide projects to six columns including the source"
   assert.equal(v.visibleLangs.length, 6);
   assert.ok(v.visibleLangs.includes("ko"));
 });
+
+test("mergeUnsavedCells re-applies only this tab's edited cells onto another tab's version", () => {
+  const cell = (key, lang) => key + "\u0000" + lang;
+  const local = ops.createProject({ name: "Local", languages: ["en", "fr", "de"], entries: { a: { en: "A", fr: "mine", de: "" }, b: { en: "B", fr: "", de: "local de" }, gone: { en: "x", fr: "y" } } });
+  const remote = ops.createProject({ name: "Remote", languages: ["en", "fr"], entries: { a: { en: "A2", fr: "theirs" }, b: { en: "B", fr: "their b" }, c: { en: "C" } } });
+  ops.mergeUnsavedCells(remote, local, [cell("a", "fr"), cell("b", "de"), cell("gone", "fr"), cell("c", "fr")]);
+  assert.equal(remote.entries.a.fr, "mine", "an unsaved local edit wins for its own cell");
+  assert.equal(remote.entries.a.en, "A2", "cells this tab did not touch keep the other tab's text");
+  assert.equal(remote.entries.b.fr, "their b");
+  assert.equal(remote.entries.b.de, undefined, "a language the other tab removed is not brought back");
+  assert.equal(ops.hasKey(remote, "gone"), false, "a key the other tab deleted is not brought back");
+  assert.deepEqual(plain(remote.entries.c), { en: "C" }, "a key that only exists remotely is left alone");
+  assert.equal(remote.name, "Remote");
+
+  // Clearing a cell locally is an edit too.
+  const local2 = ops.createProject({ languages: ["en", "fr"], entries: { a: { en: "A", fr: "" } } });
+  const remote2 = ops.createProject({ languages: ["en", "fr"], entries: { a: { en: "A", fr: "old" } } });
+  ops.mergeUnsavedCells(remote2, local2, new Set([cell("a", "fr")]));
+  assert.equal(remote2.entries.a.fr, "");
+});
+
+test("normalizeProject brings hand-written language codes to their stored form", () => {
+  const p = ops.normalizeProject({
+    name: "Hand edited",
+    languages: ["EN", "pt_BR", "fr"],
+    sourceLang: "EN",
+    entries: {
+      hello: { EN: "Hello", pt_BR: "Olá", fr: "Bonjour" },
+      both: { EN: "upper", en: "lower", "pt-br": "", pt_BR: "kept" },
+    },
+    glossary: [{ from: "Hello", to: "Olá", sourceLang: "EN", targetLang: "pt_BR" }],
+  });
+  assert.deepEqual(p.languages, ["en", "pt-br", "fr"]);
+  assert.equal(p.sourceLang, "en");
+  assert.deepEqual(plain(p.entries.hello), { en: "Hello", "pt-br": "Olá", fr: "Bonjour" });
+  assert.equal(p.entries.both.en, "lower", "an existing canonical value is not overwritten");
+  assert.equal(p.entries.both["pt-br"], "kept", "an empty canonical value takes the other spelling's text");
+  assert.equal(p.glossary[0].sourceLang, "en");
+  assert.equal(p.glossary[0].targetLang, "pt-br");
+  assert.equal(ops.computeStats(p).filled["pt-br"], 2);
+
+  // Already-canonical projects are returned with the same values (the common path on every load).
+  const again = ops.normalizeProject(plain(p));
+  assert.deepEqual(plain(again.entries), plain(p.entries));
+});

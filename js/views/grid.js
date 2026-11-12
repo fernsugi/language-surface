@@ -198,29 +198,45 @@
       }
     }
 
+    /**
+     * Render a value cell. Safe to call repeatedly: the text is only rebuilt when it actually
+     * changed, so a cell the pointer is pressed on keeps its DOM (replacing it mid-click would
+     * swallow the click).
+     */
     function fillValueCell(cell, key, lang) {
       const p = project();
       const full = store.getValue(key, lang, p);
-      const value = full.length > MAX_CELL_CHARS ? full.slice(0, MAX_CELL_CHARS) + "…" : full;
-      LS.dom.clear(cell);
-      cell.classList.toggle("missing", !full);
-      cell.classList.toggle("busy", !!(o.isBusy && o.isBusy(key, lang)));
-      if (!full) {
-        cell.appendChild(h("span.cell-empty", { "aria-label": "Empty" }, "—"));
-        return;
-      }
       const finders = o.getFinder ? o.getFinder() : null;
       const finder = finders && finders.text ? finders.text : null;
-      const text = h("span.cell-text");
-      for (const tok of LS.text.tokenizeInvisibles(value)) {
-        if (tok.t === "text") appendHighlighted(text, tok.v, finder);
-        else if (tok.t === "nl") text.append(h("span.inv", { "aria-hidden": "true" }, "↵"), "\n");
-        else text.append(h("span.inv", { "aria-hidden": "true" }, "⇥"), "\t");
+      const sig = full + "\u0000" + (finder ? finder.needle : "");
+      cell.classList.toggle("missing", !full);
+      cell.classList.toggle("busy", !!(o.isBusy && o.isBusy(key, lang)));
+
+      if (cell._sig !== sig) {
+        cell._sig = sig;
+        cell._flag = "";
+        LS.dom.clear(cell);
+        if (!full) {
+          cell.appendChild(h("span.cell-empty", { "aria-label": "Empty" }, "—"));
+        } else {
+          const value = full.length > MAX_CELL_CHARS ? full.slice(0, MAX_CELL_CHARS) + "…" : full;
+          const text = h("span.cell-text");
+          for (const tok of LS.text.tokenizeInvisibles(value)) {
+            if (tok.t === "text") appendHighlighted(text, tok.v, finder);
+            else if (tok.t === "nl") text.append(h("span.inv", { "aria-hidden": "true" }, "↵"), "\n");
+            else text.append(h("span.inv", { "aria-hidden": "true" }, "⇥"), "\t");
+          }
+          cell.appendChild(text);
+        }
       }
-      cell.appendChild(text);
-      const issues = o.getIssues ? o.getIssues(key, lang) : null;
-      if (issues && issues.length) {
-        cell.appendChild(h("span.cell-flag", { "data-tip": issues.map((x) => x.message).join(" · "), role: "img", "aria-label": "Issue: " + issues.map((x) => x.message).join(", ") }, icon("triangle-alert", { size: 14 })));
+
+      const issues = full && o.getIssues ? o.getIssues(key, lang) : null;
+      const flag = issues && issues.length ? issues.map((x) => x.message).join(" · ") : "";
+      if (cell._flag !== flag) {
+        cell._flag = flag;
+        const old = cell.querySelector(".cell-flag");
+        if (old) old.remove();
+        if (flag) cell.appendChild(h("span.cell-flag", { "data-tip": flag, role: "img", "aria-label": "Issue: " + flag }, icon("triangle-alert", { size: 14 })));
       }
     }
 
@@ -473,7 +489,9 @@
       });
       const tag = langs.htmlLang(lang);
       if (tag) ta.lang = tag;
-      editor = { key, lang, el: ta, original };
+      // `saved` is what the project holds for this cell; it differs from `original` once a draft
+      // has been saved while the window was in the background.
+      editor = { key, lang, el: ta, original, saved: original, draftToken: null };
       body.appendChild(ta);
       positionEditor();
       ta.focus({ preventScroll: true });
@@ -482,15 +500,18 @@
 
       ta.addEventListener("input", sizeEditor);
       ta.addEventListener("blur", () => {
-        // Defer so that key handlers which move to another cell run first.
-        if (editor && editor.el === ta) commitEdit();
+        if (!editor || editor.el !== ta) return;
+        // Focus moved elsewhere on the page: done with this cell. The whole window or tab went to
+        // the background (looking something up, say): keep the text safe and keep editing on return.
+        if (document.hasFocus()) commitEdit();
+        else saveEdit();
       });
       ta.addEventListener("keydown", (e) => {
-        if (e.isComposing || e.keyCode === 229) return;
+        if (LS.dom.isIME(e)) return;
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          cancelEdit();
+          cancelEdit(true);
           el.focus({ preventScroll: true });
         } else if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
           e.preventDefault();
@@ -512,24 +533,49 @@
 
     function commitEdit() {
       if (!editor) return false;
-      const { key, lang, el: ta, original } = editor;
+      const { key, lang, el: ta, saved } = editor;
       editor = null;
       const value = ta.value;
       ta.remove();
       if (o.onEditState) o.onEditState(false);
-      if (value !== original && store.hasKey(key)) {
+      // A textarea reports "\n" line endings; text stored with "\r\n" is not "changed" by a visit.
+      if (!LS.dom.sameText(value, saved) && store.hasKey(key)) {
         o.onCommit(key, lang, value);
         return true;
       }
       return false;
     }
 
-    function cancelEdit() {
+    /**
+     * Save what has been typed so far without leaving the editor. Used when the window goes to
+     * the background or the page is about to close: nothing typed is lost, and nothing is
+     * interrupted if the person comes back.
+     */
+    function saveEdit() {
+      if (!editor) return false;
+      const value = editor.el.value;
+      if (LS.dom.sameText(value, editor.saved) || !store.hasKey(editor.key)) return false;
+      const ed = editor;
+      ed.saved = value;
+      o.onCommit(ed.key, ed.lang, value);
+      ed.draftToken = store.undoToken();
+      return true;
+    }
+
+    /**
+     * Close the editor without keeping what was typed.
+     * @param {boolean} [revert] the person asked for it (Escape): also take back a draft that was
+     *   saved while the window was in the background, so the cell returns to its original text.
+     */
+    function cancelEdit(revert) {
       if (!editor) return;
-      const ta = editor.el;
+      const { key, lang, el: ta, original, saved, draftToken } = editor;
       editor = null;
       ta.remove();
       if (o.onEditState) o.onEditState(false);
+      if (revert && !LS.dom.sameText(saved, original) && store.hasKey(key)) {
+        if (!(draftToken && store.undoIfLatest(draftToken))) o.onCommit(key, lang, original);
+      }
     }
 
     /** Cell reached from (key, col) by moving rows/cols; wraps across rows when `wrap` is set. */
@@ -620,7 +666,7 @@
     });
 
     el.addEventListener("keydown", (e) => {
-      if (e.target !== el || e.isComposing) return;
+      if (e.target !== el || LS.dom.isIME(e)) return;
       const mod = e.metaKey || e.ctrlKey;
       const p = project();
       if (!p || !rows.length) return;
@@ -832,6 +878,16 @@
         if (cell) fillValueCell(cell, key, lang);
       },
 
+      /** Update every value cell of one row in place (text only where it changed, plus issue flags). */
+      refreshRowValues(key) {
+        const row = rowEl(key);
+        if (!row) return;
+        cols.forEach((lang, i) => {
+          const cell = row.children[i + 1];
+          if (cell) fillValueCell(cell, key, lang);
+        });
+      },
+
       flash(cells) {
         for (const c of cells) {
           const cell = cellEl(c.key, c.lang);
@@ -847,6 +903,7 @@
       setActive,
       startEdit,
       commitEdit,
+      saveEdit,
       cancelEdit,
       isEditing: () => !!editor,
       getRows: () => rows,

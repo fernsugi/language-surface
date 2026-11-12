@@ -41,9 +41,11 @@
     let field = "";
     let row = [];
     let inQuotes = false;
+    let quoted = false; // the current field started with a quote
     const pushRow = () => {
       row.push(field);
       field = "";
+      quoted = false;
       if (row.some((v) => v !== "")) rows.push(row);
       row = [];
     };
@@ -62,10 +64,16 @@
         }
         continue;
       }
-      if (c === '"') inQuotes = true;
-      else if (c === delimiter) {
+      // A quote only opens a quoted field at the very start of the field (optionally after
+      // spaces). Anywhere else it is ordinary text: 5" screen, Click "OK" to continue.
+      if (c === '"' && !quoted && field.trim() === "") {
+        inQuotes = true;
+        quoted = true;
+        field = "";
+      } else if (c === delimiter) {
         row.push(field);
         field = "";
+        quoted = false;
       } else if (c === "\n") pushRow();
       else if (c === "\r") {
         // Lone CR (classic Mac) ends a row; CRLF is handled by the LF.
